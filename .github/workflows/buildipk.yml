@@ -13,7 +13,7 @@ jobs:
     env:
       TARGET: aarch64-unknown-linux-musl
       OPENWRT_TARGET: mediatek/filogic
-      SDK_URL: https://downloads.openwrt.org/releases/24.10.0/targets/mediatek/filogic/openwrt-sdk-24.10.0-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+      SDK_URL: https://downloads.openwrt.org/releases/24.10.3/targets/mediatek/filogic/openwrt-sdk-24.10.3-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
 
     steps:
     - name: Checkout repository
@@ -47,7 +47,7 @@ jobs:
         sudo apt install -y axel zstd
         
         mkdir -p sdk
-        SDK_URL="https://downloads.openwrt.org/releases/24.10.0/targets/mediatek/filogic/openwrt-sdk-24.10.0-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
+        SDK_URL="https://downloads.openwrt.org/releases/24.10.3/targets/mediatek/filogic/openwrt-sdk-24.10.3-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
         
         echo "使用 axel 多線程下載 SDK..."
         axel -n 8 -o sdk/sdk.tar.zst "$SDK_URL"
