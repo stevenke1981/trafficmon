@@ -3,6 +3,11 @@ name = "trafficmon"
 version = "0.3.0"
 edition = "2021"
 
+# 明確指定二進制目標
+[[bin]]
+name = "trafficmon"
+path = "main.rs"
+
 [dependencies]
 pcap = "0.9"
 serde = { version = "1.0", features = ["derive"] }
@@ -14,3 +19,13 @@ libc = "0.2"
 signal-hook = "0.3"
 regex = "1.5"
 anyhow = "1.0"
+ctrlc = "3.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+opt-level = "z"
+
+[profile.dev]
+panic = "abort"

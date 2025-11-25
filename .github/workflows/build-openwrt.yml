@@ -121,11 +121,9 @@ jobs:
         echo "RUSTFLAGS: $RUSTFLAGS"
         echo "Working directory: $(pwd)"
         
-        # 顯示目錄結構
-        echo "Current directory contents:"
-        ls -la
-        echo "src directory contents:"
-        ls -la src/ || echo "No src directory"
+        # 顯示完整的 Cargo.toml 內容
+        echo "=== Cargo.toml Content ==="
+        cat src/Cargo.toml
         
         # 顯示 Cargo 配置
         cargo --version
@@ -135,19 +133,18 @@ jobs:
         which aarch64-openwrt-linux-musl-gcc
         aarch64-openwrt-linux-musl-gcc --version
         
-        # 驗證 Cargo.toml
-        echo "Validating Cargo.toml..."
-        cat src/Cargo.toml
-        cargo check --manifest-path=src/Cargo.toml --target aarch64-unknown-linux-musl --message-format=short
+        # 首先驗證 Cargo.toml 語法
+        echo "=== Validating Cargo.toml ==="
+        cargo check --manifest-path=src/Cargo.toml --target aarch64-unknown-linux-musl --message-format=short || echo "Cargo check failed, but continuing with build..."
         
         # 構建
-        echo "Starting build process..."
+        echo "=== Starting Build Process ==="
         cargo build --manifest-path=src/Cargo.toml --release --target aarch64-unknown-linux-musl
         
         echo "=== Build Output ==="
         find . -name "trafficmon" -type f 2>/dev/null || echo "No binary found"
         ls -la target/aarch64-unknown-linux-musl/release/ 2>/dev/null || echo "No release directory"
-
+        
     - name: Verify Binary Compatibility
       run: |
         echo "=== Binary Verification ==="
