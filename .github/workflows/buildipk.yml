@@ -36,7 +36,9 @@ jobs:
           jq \
           pkg-config \
           libssl-dev \
-          libpcap-dev
+          libpcap-dev \
+          ar \
+          tar
 
     - name: Download SDK with axel (multithreaded)
       run: |
@@ -121,24 +123,42 @@ jobs:
         
         echo "包文件準備完成"
 
-    - name: Build IPK in OpenWrt SDK
+    - name: Create IPK package from prebuilt files
       run: |
-        cd sdk
-        echo "初始化 SDK 環境..."
+        echo "從預建文件創建 IPK 包..."
         
-        # 準備必要的配置
-        touch .config
-        echo "CONFIG_ALL=y" >> .config
-        echo "CONFIG_ALL_KMODS=y" >> .config
-        echo "CONFIG_ALL_NONSHARED=y" >> .config
+        # 直接使用預先建立的目錄結構
+        mkdir -p ipk_build
         
-        # 編譯工具鏈和必要組件
-        echo "編譯工具鏈和必要組件..."
-        make tools/install -j$(nproc)
-        make toolchain/install -j$(nproc)
+        # 複製整個文件結構（包括 CONTROL）
+        cp -r openwrt/files/* ipk_build/
+        cp -r openwrt/CONTROL ipk_build/
         
-        echo "編譯 trafficmon 包..."
-        make package/trafficmon/compile -j$(nproc) V=s
+        # 確保目錄結構正確
+        mkdir -p ipk_build/usr/bin
+        
+        # 複製二進制文件
+        cp target/$TARGET/release/trafficmon ipk_build/usr/bin/
+        chmod +x ipk_build/usr/bin/trafficmon
+        
+        # 創建 IPK
+        mkdir -p artifacts
+        cd ipk_build
+        
+        tar --owner=0 --group=0 -czf ../data.tar.gz ./usr ./etc
+        tar --owner=0 --group=0 -czf ../control.tar.gz ./CONTROL
+        
+        cd ..
+        echo "2.0" > debian-binary
+        
+        ar r artifacts/trafficmon_0.3.0-1_aarch64_cortex-a53.ipk debian-binary control.tar.gz data.tar.gz
+        
+        # 清理
+        rm -f data.tar.gz control.tar.gz debian-binary
+        rm -rf ipk_build
+        
+        echo "IPK 創建成功："
+        ls -la artifacts/
 
     - name: Upload generated IPK
       uses: actions/upload-artifact@v4

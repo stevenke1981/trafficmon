@@ -1,0 +1,9 @@
+Package: trafficmon
+Version: 0.3.0-1
+Depends: libpcap
+Architecture: aarch64_cortex-a53
+Maintainer: Steven Ke <stevenke1981@email.com>
+Section: utils
+Priority: optional
+Description: Traffic Monitoring Tool written in Rust
+ A powerful traffic monitoring tool for OpenWrt written in Rust.
