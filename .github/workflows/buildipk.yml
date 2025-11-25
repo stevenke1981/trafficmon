@@ -12,6 +12,7 @@ jobs:
 
     env:
       TARGET: aarch64-unknown-linux-musl
+      OPENWRT_ARCH: aarch64_cortex-a53
       OPENWRT_TARGET: mediatek/filogic
       SDK_URL: https://downloads.openwrt.org/releases/24.10.3/targets/mediatek/filogic/openwrt-sdk-24.10.3-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
 
@@ -89,54 +90,125 @@ jobs:
         ls -la target/$TARGET/release/trafficmon
         readelf -h target/$TARGET/release/trafficmon || echo "Not a valid ELF file"
 
+    - name: Verify control file format
+      run: |
+        echo "=== Checking control file ==="
+        if [ ! -f "openwrt/CONTROL/control" ]; then
+          echo "ERROR: openwrt/CONTROL/control not found!"
+          exit 1
+        fi
+        
+        echo "Original control file contents:"
+        cat openwrt/CONTROL/control
+        echo ""
+        
+        # Fix Architecture field to match the actual target
+        echo "Updating Architecture field to match target..."
+        sed -i "s/^Architecture:.*/Architecture: $OPENWRT_ARCH/" openwrt/CONTROL/control
+        
+        echo "Updated control file contents:"
+        cat openwrt/CONTROL/control
+        echo ""
+        
+        echo "Checking for required fields:"
+        grep -q "^Package:" openwrt/CONTROL/control && echo "✓ Package field found" || (echo "✗ Package field missing" && exit 1)
+        grep -q "^Version:" openwrt/CONTROL/control && echo "✓ Version field found" || (echo "✗ Version field missing" && exit 1)
+        grep -q "^Architecture:" openwrt/CONTROL/control && echo "✓ Architecture field found" || (echo "✗ Architecture field missing" && exit 1)
+        
+        # Verify Architecture matches
+        ARCH_IN_FILE=$(grep "^Architecture:" openwrt/CONTROL/control | cut -d' ' -f2)
+        if [ "$ARCH_IN_FILE" != "$OPENWRT_ARCH" ]; then
+          echo "ERROR: Architecture mismatch!"
+          echo "Expected: $OPENWRT_ARCH"
+          echo "Found: $ARCH_IN_FILE"
+          exit 1
+        fi
+        echo "✓ Architecture matches: $OPENWRT_ARCH"
+        
+        echo ""
+        echo "Checking file format:"
+        file openwrt/CONTROL/control
+        
+        # Check for Windows line endings
+        if file openwrt/CONTROL/control | grep -q "CRLF"; then
+          echo "WARNING: Control file has Windows line endings (CRLF), converting to Unix (LF)..."
+          sed -i 's/\r$//' openwrt/CONTROL/control
+        fi
+
     - name: Create IPK package
       run: |
         echo "Creating IPK package..."
         
-        # Create temporary build directory
-        mkdir -p ipk_tmp/data
-        mkdir -p ipk_tmp/control
+        # Create working directory
+        WORKDIR="${GITHUB_WORKSPACE}/ipk_build"
+        rm -rf "$WORKDIR"
+        mkdir -p "$WORKDIR"
         
-        # Copy file structure to data directory
-        mkdir -p ipk_tmp/data/usr/bin
-        mkdir -p ipk_tmp/data/etc/init.d
-        mkdir -p ipk_tmp/data/etc/config
+        # Create data directory structure
+        mkdir -p "$WORKDIR/data/usr/bin"
+        mkdir -p "$WORKDIR/data/etc/init.d"
+        mkdir -p "$WORKDIR/data/etc/config"
         
         # Copy binary
-        cp target/$TARGET/release/trafficmon ipk_tmp/data/usr/bin/
-        chmod +x ipk_tmp/data/usr/bin/trafficmon
+        cp target/$TARGET/release/trafficmon "$WORKDIR/data/usr/bin/"
+        chmod 755 "$WORKDIR/data/usr/bin/trafficmon"
         
         # Copy config files
-        cp openwrt/files/etc/init.d/trafficmon ipk_tmp/data/etc/init.d/
-        cp openwrt/files/etc/config/trafficmon ipk_tmp/data/etc/config/
-        chmod +x ipk_tmp/data/etc/init.d/trafficmon
+        cp openwrt/files/etc/init.d/trafficmon "$WORKDIR/data/etc/init.d/"
+        cp openwrt/files/etc/config/trafficmon "$WORKDIR/data/etc/config/"
+        chmod 755 "$WORKDIR/data/etc/init.d/trafficmon"
+        chmod 644 "$WORKDIR/data/etc/config/trafficmon"
         
-        # Copy control file (directly to control directory, not CONTROL subdirectory)
-        cp openwrt/CONTROL/control ipk_tmp/control/
+        # Create control directory
+        mkdir -p "$WORKDIR/control"
+        cp openwrt/CONTROL/control "$WORKDIR/control/"
         
-        # Optional: Copy other control files if they exist
-        [ -f openwrt/CONTROL/postinst ] && cp openwrt/CONTROL/postinst ipk_tmp/control/
-        [ -f openwrt/CONTROL/prerm ] && cp openwrt/CONTROL/prerm ipk_tmp/control/
+        # Copy optional control scripts if they exist
+        [ -f openwrt/CONTROL/postinst ] && cp openwrt/CONTROL/postinst "$WORKDIR/control/" && chmod 755 "$WORKDIR/control/postinst"
+        [ -f openwrt/CONTROL/prerm ] && cp openwrt/CONTROL/prerm "$WORKDIR/control/" && chmod 755 "$WORKDIR/control/prerm"
+        [ -f openwrt/CONTROL/postrm ] && cp openwrt/CONTROL/postrm "$WORKDIR/control/" && chmod 755 "$WORKDIR/control/postrm"
         
-        # Create archives
-        cd ipk_tmp/data
-        tar --numeric-owner --owner=0 --group=0 -czf ../../data.tar.gz .
-        cd ../control
-        tar --numeric-owner --owner=0 --group=0 -czf ../../control.tar.gz .
-        cd ../..
+        # Create data.tar.gz
+        echo "Creating data.tar.gz..."
+        cd "$WORKDIR/data"
+        tar --numeric-owner --owner=0 --group=0 -czf ../data.tar.gz ./
+        cd "$WORKDIR"
+        
+        # Create control.tar.gz
+        echo "Creating control.tar.gz..."
+        cd "$WORKDIR/control"
+        tar --numeric-owner --owner=0 --group=0 -czf ../control.tar.gz ./
+        cd "$WORKDIR"
         
         # Create debian-binary
-        echo "2.0" > debian-binary
+        echo "2.0" > "$WORKDIR/debian-binary"
         
-        # Create IPK
-        mkdir -p artifacts
-        ar r artifacts/trafficmon_0.3.0-1_aarch64_cortex-a53.ipk debian-binary control.tar.gz data.tar.gz
+        # Verify archive contents before building IPK
+        echo "Verifying control.tar.gz contents:"
+        tar -tzf control.tar.gz
+        echo "Verifying data.tar.gz contents (first 10 files):"
+        tar -tzf data.tar.gz | head -10
         
-        # Cleanup
-        rm -rf ipk_tmp debian-binary control.tar.gz data.tar.gz
+        # Create IPK using ar
+        mkdir -p "${GITHUB_WORKSPACE}/artifacts"
+        cd "$WORKDIR"
+        ar r "${GITHUB_WORKSPACE}/artifacts/trafficmon_0.3.0-1_${OPENWRT_ARCH}.ipk" debian-binary control.tar.gz data.tar.gz
         
         echo "IPK created successfully:"
-        ls -lh artifacts/
+        ls -lh "${GITHUB_WORKSPACE}/artifacts/"
+        
+        # Test ar extraction
+        echo "Testing IPK integrity:"
+        cd "${GITHUB_WORKSPACE}"
+        mkdir -p test_extract
+        cd test_extract
+        ar x "${GITHUB_WORKSPACE}/artifacts/trafficmon_0.3.0-1_${OPENWRT_ARCH}.ipk"
+        echo "Extracted files:"
+        ls -la
+        
+        # Cleanup
+        cd "${GITHUB_WORKSPACE}"
+        rm -rf "$WORKDIR" test_extract
 
     - name: Verify IPK package structure
       run: |
@@ -145,10 +217,10 @@ jobs:
         mkdir -p ipk_inspect
         cd ipk_inspect
         
-        cp ../artifacts/trafficmon_0.3.0-1_aarch64_cortex-a53.ipk .
+        cp ../artifacts/trafficmon_0.3.0-1_${OPENWRT_ARCH}.ipk .
         
         echo "=== 1. Extract IPK with ar ==="
-        ar x trafficmon_0.3.0-1_aarch64_cortex-a53.ipk
+        ar x trafficmon_0.3.0-1_${OPENWRT_ARCH}.ipk
         
         echo "=== 2. Check extracted files ==="
         ls -la

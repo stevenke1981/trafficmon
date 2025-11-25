@@ -1,7 +1,7 @@
 Package: trafficmon
 Version: 0.3.0-1
 Depends: libpcap
-Architecture: aarch64_generic
+Architecture: aarch64_cortex-a53
 Maintainer: Steven Ke <stevenke1981@email.com>
 Section: utils
 Priority: optional
