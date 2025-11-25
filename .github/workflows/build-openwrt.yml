@@ -315,6 +315,7 @@ EOF
         ar p dist/*.ipk data.tar.gz | tar -tz | sort
 
     - name: Upload Build Artifacts
+      if: steps.metadata.outputs.binary_exists == 'true'
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.PACKAGE_NAME }}-${{ env.OPENWRT_ARCH }}-${{ github.sha }}
@@ -322,7 +323,6 @@ EOF
           dist/*.ipk
           src/target/aarch64-unknown-linux-musl/release/trafficmon
         retention-days: 30
-      if: steps.metadata.outputs.binary_exists == 'true'
 
     - name: Build Failure Notification
       if: steps.metadata.outputs.binary_exists != 'true'
