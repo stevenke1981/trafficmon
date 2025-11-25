@@ -1,6 +1,512 @@
-Executing package manager
-opkg install /tmp/upload.ipk
-Errors
-Collected errors:
- * pkg_init_from_file: Malformed package file /tmp/upload.ipk.
-The opkg install command failed with code 255.
+name: Build and Release OpenWrt TrafficMon Package
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  release:
+    types: [ published ]
+
+env:
+  PACKAGE_NAME: trafficmon
+  TARGET: aarch64_cortex-a53
+  OPENWRT_ARCH: aarch64_cortex-a53
+  TOOLCHAIN_TRIPLE: aarch64-openwrt-linux-musl
+  SDK_URL: https://downloads.openwrt.org/releases/24.10.0/targets/mediatek/filogic/openwrt-sdk-24.10.0-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Install Build Dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          build-essential \
+          clang \
+          llvm \
+          libc6-dev-i386 \
+          unzip \
+          xz-utils \
+          zstd \
+          gcc-aarch64-linux-gnu \
+          file \
+          aria2 \
+          jq \
+          pkg-config \
+          libssl-dev \
+          libpcap-dev
+
+    - name: Cache OpenWrt SDK
+      uses: actions/cache@v3
+      id: sdk-cache
+      with:
+        path: openwrt-sdk
+        key: ${{ runner.os }}-openwrt-sdk-24.10.0-${{ hashFiles('**/src/Cargo.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-openwrt-sdk-24.10.0-
+
+    - name: Download and Extract OpenWrt SDK
+      if: steps.sdk-cache.outputs.cache-hit != 'true'
+      run: |
+        echo "Downloading OpenWrt SDK 24.10.0..."
+        aria2c -x 16 -s 16 --continue=true $SDK_URL -o sdk.tar.zst
+        
+        echo "Extracting SDK (zstd format)..."
+        unzstd sdk.tar.zst -o sdk.tar || tar -I zstd -xf sdk.tar.zst
+        
+        echo "Extracting tar archive..."
+        tar -xf sdk.tar
+        
+        SDK_DIR=$(find . -maxdepth 1 -name "openwrt-sdk-*" -type d | head -1)
+        if [ -n "$SDK_DIR" ]; then
+          mv "$SDK_DIR" openwrt-sdk
+          echo "SDK extracted to: openwrt-sdk"
+        else
+          echo "Error: Could not find extracted SDK directory"
+          exit 1
+        fi
+        
+        echo "SDK contents:"
+        ls -la openwrt-sdk/
+
+    - name: Set Environment Variables
+      run: |
+        echo "STAGING_DIR=$GITHUB_WORKSPACE/openwrt-sdk/staging_dir" >> $GITHUB_ENV
+        echo "PATH=$GITHUB_WORKSPACE/openwrt-sdk/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/bin:$PATH" >> $GITHUB_ENV
+        echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-openwrt-linux-musl-gcc" >> $GITHUB_ENV
+        echo "CC_aarch64-unknown-linux-musl=aarch64-openwrt-linux-musl-gcc" >> $GITHUB_ENV
+
+    - name: Verify Toolchain
+      run: |
+        echo "=== Toolchain Verification ==="
+        which aarch64-openwrt-linux-musl-gcc || echo "Toolchain not found in PATH"
+        aarch64-openwrt-linux-musl-gcc --version || echo "Failed to get toolchain version"
+        echo "STAGING_DIR: $STAGING_DIR"
+        echo "Current directory: $(pwd)"
+        echo "Workspace contents:"
+        ls -la
+
+    - name: Install Rust Toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: aarch64-unknown-linux-musl
+
+    - name: Cache Cargo Registry
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          src/target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/src/Cargo.toml', '**/src/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Build Rust Binary
+      run: |
+        export RUSTFLAGS="-C linker=aarch64-openwrt-linux-musl-gcc -C target-feature=-crt-static"
+        export PKG_CONFIG_ALLOW_CROSS=1
+        export PKG_CONFIG_SYSROOT_DIR=$STAGING_DIR
+        
+        echo "=== Building Rust Binary ==="
+        echo "RUSTFLAGS: $RUSTFLAGS"
+        echo "Working directory: $(pwd)"
+        
+        echo "=== Cargo.toml Content ==="
+        cat src/Cargo.toml
+        
+        cargo --version
+        rustc --version
+        
+        which aarch64-openwrt-linux-musl-gcc
+        aarch64-openwrt-linux-musl-gcc --version
+        
+        echo "=== Validating Cargo.toml ==="
+        cargo check --manifest-path=src/Cargo.toml --target aarch64-unknown-linux-musl --message-format=short || echo "Cargo check failed, but continuing with build..."
+        
+        echo "=== Starting Build Process ==="
+        cargo build --manifest-path=src/Cargo.toml --release --target aarch64-unknown-linux-musl
+        
+        echo "=== Build Output ==="
+        echo "Looking for binary in src/target/..."
+        find src/target -name "trafficmon" -type f 2>/dev/null || echo "No binary found"
+        ls -la src/target/aarch64-unknown-linux-musl/release/ 2>/dev/null || echo "No release directory"
+
+    - name: Verify Binary Compatibility
+      run: |
+        echo "=== Binary Verification ==="
+        BINARY_PATH="src/target/aarch64-unknown-linux-musl/release/trafficmon"
+        
+        if [ -f "$BINARY_PATH" ]; then
+          echo "✅ Binary found at: $BINARY_PATH"
+          file "$BINARY_PATH"
+          echo "Binary size:"
+          ls -lh "$BINARY_PATH"
+          echo "Dynamic dependencies:"
+          aarch64-openwrt-linux-musl-objdump -p "$BINARY_PATH" | grep NEEDED || echo "No dynamic dependencies found"
+        else
+          echo "❌ Binary not found at expected path: $BINARY_PATH"
+          echo "Searching for binary in all locations:"
+          find . -name "trafficmon" -type f 2>/dev/null
+          exit 1
+        fi
+
+    - name: Get Package Metadata
+      id: metadata
+      run: |
+        VERSION=$(grep -m1 '^version' src/Cargo.toml | cut -d'"' -f2)
+        if [ -z "$VERSION" ]; then
+          VERSION="0.1.0"
+          echo "Warning: Version not found in Cargo.toml, using default: $VERSION"
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        
+        GIT_HASH=$(git rev-parse --short HEAD)
+        echo "git_hash=$GIT_HASH" >> $GITHUB_OUTPUT
+        
+        BINARY_PATH="src/target/aarch64-unknown-linux-musl/release/trafficmon"
+        if [ -f "$BINARY_PATH" ]; then
+          echo "binary_exists=true" >> $GITHUB_OUTPUT
+          echo "binary_path=$BINARY_PATH" >> $GITHUB_OUTPUT
+        else
+          echo "binary_exists=false" >> $GITHUB_OUTPUT
+        fi
+        
+        echo "Package version: $VERSION"
+        echo "Git hash: $GIT_HASH"
+        echo "Binary path: $BINARY_PATH"
+        echo "Binary exists: $([ -f "$BINARY_PATH" ] && echo 'true' || echo 'false')"
+
+    - name: Prepare OpenWrt Package Structure
+      if: steps.metadata.outputs.binary_exists == 'true'
+      run: |
+        PKG_DIR=openwrt-package
+        BINARY_PATH="${{ steps.metadata.outputs.binary_path }}"
+        
+        mkdir -p $PKG_DIR/usr/bin
+        mkdir -p $PKG_DIR/etc/init.d
+        mkdir -p $PKG_DIR/etc/config
+        mkdir -p $PKG_DIR/CONTROL
+        
+        echo "=== Copying Binary ==="
+        cp "$BINARY_PATH" $PKG_DIR/usr/bin/
+        chmod +x $PKG_DIR/usr/bin/trafficmon
+        echo "✅ Binary copied and made executable"
+        
+        echo "=== Creating Init Script ==="
+        if [ -f "files/trafficmon.init" ]; then
+          cp files/trafficmon.init $PKG_DIR/etc/init.d/trafficmon
+          chmod +x $PKG_DIR/etc/init.d/trafficmon
+          echo "✅ Init script copied from files/trafficmon.init"
+        else
+          echo '#!/bin/sh /etc/rc.common' > $PKG_DIR/etc/init.d/trafficmon
+          echo 'START=99' >> $PKG_DIR/etc/init.d/trafficmon
+          echo 'USE_PROCD=1' >> $PKG_DIR/etc/init.d/trafficmon
+          echo '' >> $PKG_DIR/etc/init.d/trafficmon
+          echo 'start_service() {' >> $PKG_DIR/etc/init.d/trafficmon
+          echo '    procd_open_instance' >> $PKG_DIR/etc/init.d/trafficmon
+          echo '    procd_set_param command /usr/bin/trafficmon' >> $PKG_DIR/etc/init.d/trafficmon
+          echo '    procd_set_param stdout 1' >> $PKG_DIR/etc/init.d/trafficmon
+          echo '    procd_set_param stderr 1' >> $PKG_DIR/etc/init.d/trafficmon
+          echo '    procd_set_param respawn' >> $PKG_DIR/etc/init.d/trafficmon
+          echo '    procd_close_instance' >> $PKG_DIR/etc/init.d/trafficmon
+          echo '}' >> $PKG_DIR/etc/init.d/trafficmon
+          chmod +x $PKG_DIR/etc/init.d/trafficmon
+          echo "✅ Basic init script created"
+        fi
+        
+        echo "=== Creating Config File ==="
+        if [ -f "config/trafficmon.conf" ]; then
+          cp config/trafficmon.conf $PKG_DIR/etc/config/trafficmon
+          echo "✅ Config file copied from config/trafficmon.conf"
+        else
+          echo '# TrafficMon Configuration' > $PKG_DIR/etc/config/trafficmon
+          echo 'config global' >> $PKG_DIR/etc/config/trafficmon
+          echo '    option enabled "1"' >> $PKG_DIR/etc/config/trafficmon
+          echo '    option report_interval "60"' >> $PKG_DIR/etc/config/trafficmon
+          echo '    option log_level "info"' >> $PKG_DIR/etc/config/trafficmon
+          echo '' >> $PKG_DIR/etc/config/trafficmon
+          echo '# Service definitions' >> $PKG_DIR/etc/config/trafficmon
+          echo 'config service "netflix"' >> $PKG_DIR/etc/config/trafficmon
+          echo '    option enabled "0"' >> $PKG_DIR/etc/config/trafficmon
+          echo '    option ports "80,443,1935"' >> $PKG_DIR/etc/config/trafficmon
+          echo '' >> $PKG_DIR/etc/config/trafficmon
+          echo 'config service "youtube"' >> $PKG_DIR/etc/config/trafficmon
+          echo '    option enabled "0"' >> $PKG_DIR/etc/config/trafficmon
+          echo '    option ports "80,443,1935"' >> $PKG_DIR/etc/config/trafficmon
+          echo "✅ Basic config file created"
+        fi
+        
+        VERSION="${{ steps.metadata.outputs.version }}"
+        GIT_HASH="${{ steps.metadata.outputs.git_hash }}"
+        REPOSITORY="${{ github.repository }}"
+        MAINTAINER="${{ github.repository_owner }}"
+        
+        # 使用 printf 創建 control 文件，確保格式正確
+        # 注意：每個欄位後面必須有換行，Description 的續行要以空格開頭
+        printf "Package: %s\n" "$PACKAGE_NAME" > $PKG_DIR/CONTROL/control
+        printf "Version: %s-%s\n" "$VERSION" "$GIT_HASH" >> $PKG_DIR/CONTROL/control
+        printf "Depends: libc, libpcap\n" >> $PKG_DIR/CONTROL/control
+        printf "Section: net\n" >> $PKG_DIR/CONTROL/control
+        printf "Architecture: %s\n" "$OPENWRT_ARCH" >> $PKG_DIR/CONTROL/control
+        printf "Maintainer: %s\n" "$MAINTAINER" >> $PKG_DIR/CONTROL/control
+        printf "Description: Traffic monitoring tool for OpenWrt\n" >> $PKG_DIR/CONTROL/control
+        
+        # 驗證 control 文件
+        echo "=== Control File Content ==="
+        cat $PKG_DIR/CONTROL/control
+        echo "=== End of Control File ==="
+        echo "Control file size: $(wc -c < $PKG_DIR/CONTROL/control) bytes"
+        echo "Control file lines: $(wc -l < $PKG_DIR/CONTROL/control)"
+        
+        echo "=== Package Structure ==="
+        find $PKG_DIR -type f | sort
+
+    - name: Build IPK Package
+      if: steps.metadata.outputs.binary_exists == 'true'
+      run: |
+        VERSION="${{ steps.metadata.outputs.version }}"
+        GIT_HASH="${{ steps.metadata.outputs.git_hash }}"
+        IPK_NAME="${PACKAGE_NAME}_${VERSION}-${GIT_HASH}_${OPENWRT_ARCH}.ipk"
+        
+        echo "=== Building IPK Package: $IPK_NAME ==="
+        
+        # 清理並創建臨時構建目錄
+        rm -rf ipk-build
+        mkdir -p ipk-build/data
+        mkdir -p ipk-build/control
+        
+        # 複製數據文件到臨時目錄
+        echo "Copying data files..."
+        cp -r openwrt-package/usr ipk-build/data/
+        cp -r openwrt-package/etc ipk-build/data/
+        
+        # 複製 control 文件
+        echo "Copying control file..."
+        cp openwrt-package/CONTROL/control ipk-build/control/
+        
+        # 顯示 control 文件內容
+        echo "=== Control file content ==="
+        cat ipk-build/control/control
+        echo "=== End of control file ==="
+        
+        # 創建 debian-binary
+        echo "2.0" > ipk-build/debian-binary
+        
+        # 打包 data.tar.gz
+        echo "Creating data.tar.gz..."
+        cd ipk-build/data
+        tar czf ../data.tar.gz --owner=0 --group=0 .
+        cd ../..
+        
+        # 打包 control.tar.gz
+        echo "Creating control.tar.gz..."
+        cd ipk-build/control
+        tar czf ../control.tar.gz --owner=0 --group=0 .
+        cd ../..
+        
+        # 驗證 tar 文件
+        echo "=== Verifying tar archives ==="
+        echo "control.tar.gz contents:"
+        tar tzf ipk-build/control.tar.gz
+        echo "data.tar.gz contents (first 10):"
+        tar tzf ipk-build/data.tar.gz | head -10
+        
+        # 創建 IPK 包
+        mkdir -p dist
+        cd ipk-build
+        echo "Creating IPK with ar..."
+        ar cr ../dist/$IPK_NAME debian-binary data.tar.gz control.tar.gz
+        cd ..
+        
+        # 驗證 IPK
+        echo "=== IPK file info ==="
+        ls -lh dist/$IPK_NAME
+        file dist/$IPK_NAME
+        
+        echo "=== IPK archive members ==="
+        ar t dist/$IPK_NAME
+        
+        echo "✅ IPK package created successfully"
+
+    - name: Verify IPK Package
+      if: steps.metadata.outputs.binary_exists == 'true'
+      run: |
+        echo "=== IPK Package Verification ==="
+        echo "Package file:"
+        ls -lh dist/*.ipk
+        file dist/*.ipk
+        
+        echo ""
+        echo "=== Extracting and verifying IPK structure ==="
+        
+        # 創建測試目錄
+        mkdir -p test-ipk
+        cd test-ipk
+        
+        # 解壓 IPK
+        ar x ../dist/*.ipk
+        
+        echo "IPK archive members extracted:"
+        ls -lh
+        
+        # 檢查必要文件
+        if [ ! -f "debian-binary" ]; then
+          echo "❌ Missing debian-binary"
+          exit 1
+        fi
+        
+        if [ ! -f "data.tar.gz" ]; then
+          echo "❌ Missing data.tar.gz"
+          exit 1
+        fi
+        
+        if [ ! -f "control.tar.gz" ]; then
+          echo "❌ Missing control.tar.gz"
+          exit 1
+        fi
+        
+        echo "✅ All required files present"
+        
+        # 檢查 debian-binary 內容
+        echo ""
+        echo "debian-binary content:"
+        cat debian-binary
+        
+        # 檢查 control.tar.gz
+        echo ""
+        echo "=== control.tar.gz contents ==="
+        tar tzf control.tar.gz
+        echo ""
+        echo "control file content:"
+        tar xzf control.tar.gz
+        cat control
+        
+        # 檢查 data.tar.gz
+        echo ""
+        echo "=== data.tar.gz contents (first 20 files) ==="
+        tar tzf data.tar.gz | head -20
+        
+        # 驗證二進制文件存在
+        echo ""
+        echo "=== Checking for trafficmon binary ==="
+        if tar tzf data.tar.gz | grep -q "usr/bin/trafficmon"; then
+          echo "✅ trafficmon binary found in package"
+        else
+          echo "❌ trafficmon binary NOT found in package"
+          exit 1
+        fi
+        
+        cd ..
+        
+        echo ""
+        echo "✅ IPK package structure verified successfully"
+
+    - name: Upload Build Artifacts
+      if: steps.metadata.outputs.binary_exists == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.PACKAGE_NAME }}-${{ env.OPENWRT_ARCH }}-${{ github.sha }}
+        path: |
+          dist/*.ipk
+          ${{ steps.metadata.outputs.binary_path }}
+        retention-days: 30
+
+    - name: Build Failure Notification
+      if: steps.metadata.outputs.binary_exists != 'true'
+      run: |
+        echo "❌ Build failed: Binary not found"
+        echo "Please check the build logs for errors"
+        exit 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' && github.event.action == 'published'
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Download Build Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: ${{ env.PACKAGE_NAME }}-${{ env.OPENWRT_ARCH }}-*
+        path: artifacts/
+
+    - name: Display Artifact Contents
+      run: |
+        echo "=== Downloaded Artifacts ==="
+        find artifacts/ -type f -exec ls -la {} \;
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          artifacts/**/*.ipk
+          artifacts/**/trafficmon
+        body: |
+          # TrafficMon - OpenWrt Traffic Monitoring Package
+          
+          ## 📦 Installation
+          ```bash
+          # Upload IPK to your router
+          scp trafficmon_*.ipk root@192.168.1.1:/tmp/
+          
+          # SSH to router and install
+          ssh root@192.168.1.1
+          opkg install /tmp/trafficmon_*.ipk
+          
+          # Enable and start service
+          /etc/init.d/trafficmon enable
+          /etc/init.d/trafficmon start
+          ```
+          
+          ## 🎯 Target Platform
+          - **Architecture**: ${{ env.OPENWRT_ARCH }}
+          - **Chipset**: MediaTek Filogic (MT7981/MT7986)
+          - **CPU**: ARM Cortex-A53 64-bit
+          - **OpenWrt Version**: 24.10.0
+          - **libc**: musl
+          - **GCC**: 13.3.0
+          
+          ## 📁 Package Contents
+          - `/usr/bin/trafficmon` - Main binary
+          - `/etc/init.d/trafficmon` - Init script
+          - `/etc/config/trafficmon` - Configuration file
+          
+          ## 🔧 Dependencies
+          - libpcap
+          - nftables
+          - libc
+          
+          ## 🛠️ Build Information
+          - **SDK Version**: 24.10.0
+          - **Build Date**: ${{ github.event.release.published_at }}
+          - **Commit**: ${{ github.sha }}
+          - **Toolchain**: aarch64-openwrt-linux-musl-gcc 13.3.0
+          
+          ## 📋 Usage
+          After installation, configure `/etc/config/trafficmon` and restart the service.
+          
+          ### Example Configuration:
+          ```bash
+          # Enable traffic monitoring
+          uci set trafficmon.global.enabled=1
+          uci commit trafficmon
+          /etc/init.d/trafficmon restart
+          ```
+          
+          ## 🎯 Features
+          - Traffic monitoring and classification
+          - nftables-based filtering
+          - Support for Netflix, YouTube and other services
+          - Real-time statistics
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
