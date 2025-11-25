@@ -75,25 +75,17 @@ jobs:
         
     - name: Build Rust binary
       run: |
-        # 確保在正確的目錄中構建
-        if [ -f "Cargo.toml" ]; then
-          echo "在項目根目錄構建"
-          cargo build --release --target $TARGET
-        elif [ -f "../Cargo.toml" ]; then
-          echo "在子目錄中，切換到根目錄"
-          cd ..
-          cargo build --release --target $TARGET
-        else
-          echo "錯誤: 找不到 Cargo.toml"
-          find . -name "Cargo.toml"
-          exit 1
-        fi
+        echo "當前工作目錄: $(pwd)"
+        echo "檢查 Cargo.toml..."
+        ls -la Cargo.toml
+        echo "檢查 src 目錄..."
+        ls -la src/
         
-        mkdir -p openwrt_bin
-        cp target/$TARGET/release/trafficmon openwrt_bin/
-
-    - name: Build Rust binary
-      run: |
+        # 清理可能的構建緩存問題
+        cargo clean
+        
+        # 嘗試構建
+        echo "開始構建..."
         cargo build --release --target $TARGET
         mkdir -p openwrt_bin
         cp target/$TARGET/release/trafficmon openwrt_bin/
