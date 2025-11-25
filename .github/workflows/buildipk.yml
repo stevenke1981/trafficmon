@@ -4,6 +4,7 @@ on:
   push:
     branches: [ main, master ]
   pull_request:
+    branches: [ main, master ]
 
 jobs:
   build:
@@ -26,7 +27,7 @@ jobs:
     - name: Download and extract OpenWrt SDK
       run: |
         mkdir -p sdk
-        wget -O sdk/sdk.tar.zst "${{ env.SDK_URL }}"
+        wget -O sdk/sdk.tar.zst "$SDK_URL"
         tar -I zstd -xf sdk/sdk.tar.zst -C sdk --strip-components=1
         echo "SDK extracted"
 
@@ -40,11 +41,7 @@ jobs:
       run: |
         TOOLCHAIN_BIN="${GITHUB_WORKSPACE}/sdk/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/bin"
         mkdir -p .cargo
-        printf "%s\n" \
-"[target.aarch64-unknown-linux-musl]" \
-"linker = \"$TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc\"" \
-"ar = \"$TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-ar\"" \
-        > .cargo/config.toml
+        printf "[target.%s]\nlinker = \"%s/aarch64-openwrt-linux-musl-gcc\"\nar = \"%s/aarch64-openwrt-linux-musl-ar\"\n" "$TARGET" "$TOOLCHAIN_BIN" "$TOOLCHAIN_BIN" > .cargo/config.toml
         cat .cargo/config.toml
 
     - name: Build Rust binary
@@ -53,49 +50,19 @@ jobs:
         mkdir -p openwrt_bin
         cp target/$TARGET/release/trafficmon openwrt_bin/
 
-    - name: Prepare OpenWrt package structure
+    - name: Prepare OpenWrt package
       run: |
+        # Copy pre-built files from repository
         mkdir -p sdk/package/trafficmon
-        mkdir -p sdk/package/trafficmon/files/usr/bin
+        cp openwrt/Makefile sdk/package/trafficmon/
+        
+        # Copy binary and configuration files
+        mkdir -p sdk/package/trafficmon/files
+        cp -r openwrt/files/* sdk/package/trafficmon/files/
+        
+        # Copy the built binary
         cp openwrt_bin/trafficmon sdk/package/trafficmon/files/usr/bin/
-
-        mkdir -p sdk/package/trafficmon/files/etc/init.d
-        cp files/trafficemon.init sdk/package/trafficmon/files/etc/init.d/trafficmon
-        chmod +x sdk/package/trafficmon/files/etc/init.d/trafficmon
-
-        mkdir -p sdk/package/trafficmon/files/etc/config
-        cp config/trafficmon.conf sdk/package/trafficmon/files/etc/config/trafficmon
-
-        # Create Makefile
-        printf "%s\n" \
-"include \$(TOPDIR)/rules.mk" \
-"" \
-"PKG_NAME:=trafficmon" \
-"PKG_VERSION:=0.3.0" \
-"PKG_RELEASE:=1" \
-"" \
-"include \$(INCLUDE_DIR)/package.mk" \
-"" \
-"define Package/trafficmon" \
-"  SECTION:=utils" \
-"  CATEGORY:=Utilities" \
-"  TITLE:=Traffic Monitoring Tool (Rust)" \
-"  DEPENDS:=+libpcap" \
-"endef" \
-"" \
-"define Package/trafficmon/install" \
-"  \$(INSTALL_DIR) \$(1)/usr/bin" \
-"  \$(INSTALL_BIN) ./files/usr/bin/trafficmon \$(1)/usr/bin/" \
-"" \
-"  \$(INSTALL_DIR) \$(1)/etc/init.d" \
-"  \$(INSTALL_BIN) ./files/etc/init.d/trafficmon \$(1)/etc/init.d/" \
-"" \
-"  \$(INSTALL_DIR) \$(1)/etc/config" \
-"  \$(INSTALL_CONF) ./files/etc/config/trafficmon \$(1)/etc/config/trafficmon" \
-"endef" \
-"" \
-"\$(eval \$(call BuildPackage,trafficmon))" \
-        > sdk/package/trafficmon/Makefile
+        chmod +x sdk/package/trafficmon/files/usr/bin/trafficmon
 
     - name: Build IPK in OpenWrt SDK
       run: |

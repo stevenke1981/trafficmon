@@ -1,0 +1,4 @@
+config trafficmon 'config'
+    option interface 'br-lan'
+    option interval '60'
+    option enabled '1'
