@@ -72,7 +72,8 @@ jobs:
         run: |
           cargo build --release --target ${{ env.RUST_TARGET }}
           # 再 strip 一次保險
-          strip target/${{ env.RUST_TARGET }}/release/${{ env.PACKAGE_NAME }}
+          ${{ github.workspace }}/sdk/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/bin/aarch64-openwrt-linux-musl-strip \
+            target/${{ env.RUST_TARGET }}/release/${{ env.PACKAGE_NAME }}
 
       - name: Verify binary is static
         run: |
