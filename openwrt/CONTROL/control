@@ -7,3 +7,4 @@ Section: utils
 Priority: optional
 Description: Traffic Monitoring Tool written in Rust
  A powerful traffic monitoring tool for OpenWrt written in Rust.
+ 
