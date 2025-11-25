@@ -75,6 +75,9 @@ jobs:
         
     - name: Build Rust binary (alternative approach)
       run: |
+        echo "檢查 Cargo.toml 配置..."
+        cat Cargo.toml
+        
         echo "嘗試直接編譯..."
         # 直接使用 rustc 編譯（繞過 Cargo）
         rustc --version

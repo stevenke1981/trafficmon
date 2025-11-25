@@ -4,9 +4,9 @@ version = "0.3.0"
 edition = "2021"
 
 # 明確指定二進制目標
-[[bin]]
-name = "trafficmon"
-path = "main.rs"
+# [[bin]]
+# name = "trafficmon"
+# path = "src/main.rs"
 
 [dependencies]
 pcap = "0.9"
