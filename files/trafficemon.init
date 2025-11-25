@@ -1,0 +1,74 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=10
+
+USE_PROCD=1
+
+validate_config_section_trafficmon() {
+    uci -q show trafficmon >/dev/null || return 1
+    return 0
+}
+
+start_service() {
+    # 等待網絡準備好
+    sleep 5
+    
+    # 檢查配置是否存在
+    if ! validate_config_section_trafficmon; then
+        echo "Error: trafficmon configuration not found" >&2
+        return 1
+    fi
+    
+    # 加載必要的內核模組
+    [ -d /sys/module/nf_tables ] || insmod nf_tables 2>/dev/null
+    [ -d /sys/module/nft_chain_nat ] || insmod nft_chain_nat 2>/dev/null
+    [ -d /sys/module/nft_counter ] || insmod nft_counter 2>/dev/null
+    
+    procd_open_instance
+    procd_set_param command /usr/bin/trafficmon
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_set_param respawn
+    procd_set_param respawn_retry 5
+    procd_set_param user root
+    procd_close_instance
+    
+    echo "Starting trafficmon service..."
+}
+
+stop_service() {
+    echo "Stopping trafficmon service..."
+    
+    # 發送 SIGTERM 信號
+    killall -TERM trafficmon 2>/dev/null
+    
+    # 等待進程結束
+    local count=0
+    while pgrep trafficmon >/dev/null && [ $count -lt 10 ]; do
+        sleep 1
+        count=$((count + 1))
+    done
+    
+    # 如果進程還在，強制殺死
+    if pgrep trafficmon >/dev/null; then
+        killall -KILL trafficmon 2>/dev/null
+    fi
+    
+    # 清理 nftables 規則
+    nft delete table inet trafficmon 2>/dev/null || true
+    
+    echo "Trafficmon service stopped"
+}
+
+reload_service() {
+    # 重新加載配置
+    stop_service
+    sleep 2
+    start_service
+}
+
+boot() {
+    # 在啟動時運行
+    start_service
+}
