@@ -123,42 +123,54 @@ jobs:
         
         echo "包文件準備完成"
 
-    - name: Create IPK package from prebuilt files
+    - name: Create IPK package
       run: |
-        echo "從預建文件創建 IPK 包..."
+        echo "Creating IPK package..."
         
-        # 直接使用預先建立的目錄結構
-        mkdir -p ipk_build
+        # Create temporary build directory
+        mkdir -p ipk_tmp/data
+        mkdir -p ipk_tmp/control
         
-        # 複製整個文件結構（包括 CONTROL）
-        cp -r openwrt/files/* ipk_build/
-        cp -r openwrt/CONTROL ipk_build/
+        # Copy file structure to data directory
+        mkdir -p ipk_tmp/data/usr/bin
+        mkdir -p ipk_tmp/data/etc/init.d
+        mkdir -p ipk_tmp/data/etc/config
         
-        # 確保目錄結構正確
-        mkdir -p ipk_build/usr/bin
+        # Copy binary
+        cp target/$TARGET/release/trafficmon ipk_tmp/data/usr/bin/
+        chmod +x ipk_tmp/data/usr/bin/trafficmon
         
-        # 複製二進制文件
-        cp target/$TARGET/release/trafficmon ipk_build/usr/bin/
-        chmod +x ipk_build/usr/bin/trafficmon
+        # Copy config files
+        cp openwrt/files/etc/init.d/trafficmon ipk_tmp/data/etc/init.d/
+        cp openwrt/files/etc/config/trafficmon ipk_tmp/data/etc/config/
+        chmod +x ipk_tmp/data/etc/init.d/trafficmon
         
-        # 創建 IPK
-        mkdir -p artifacts
-        cd ipk_build
+        # Copy control file (directly to control directory, not CONTROL subdirectory)
+        cp openwrt/CONTROL/control ipk_tmp/control/
         
-        tar --owner=0 --group=0 -czf ../data.tar.gz ./usr ./etc
-        tar --owner=0 --group=0 -czf ../control.tar.gz ./CONTROL
+        # Optional: Copy other control files if they exist
+        [ -f openwrt/CONTROL/postinst ] && cp openwrt/CONTROL/postinst ipk_tmp/control/
+        [ -f openwrt/CONTROL/prerm ] && cp openwrt/CONTROL/prerm ipk_tmp/control/
         
-        cd ..
+        # Create archives
+        cd ipk_tmp/data
+        tar --numeric-owner --owner=0 --group=0 -czf ../../data.tar.gz .
+        cd ../control
+        tar --numeric-owner --owner=0 --group=0 -czf ../../control.tar.gz .
+        cd ../..
+        
+        # Create debian-binary
         echo "2.0" > debian-binary
         
+        # Create IPK
+        mkdir -p artifacts
         ar r artifacts/trafficmon_0.3.0-1_aarch64_cortex-a53.ipk debian-binary control.tar.gz data.tar.gz
         
-        # 清理
-        rm -f data.tar.gz control.tar.gz debian-binary
-        rm -rf ipk_build
+        # Cleanup
+        rm -rf ipk_tmp debian-binary control.tar.gz data.tar.gz
         
-        echo "IPK 創建成功："
-        ls -la artifacts/
+        echo "IPK created successfully:"
+        ls -lh artifacts/
 
     - name: Upload generated IPK
       uses: actions/upload-artifact@v4
