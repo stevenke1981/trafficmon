@@ -110,7 +110,8 @@ jobs:
 
     - name: Build Rust Binary
       run: |
-        export RUSTFLAGS="-C linker=aarch64-openwrt-linux-musl-gcc -C target-feature=-crt-static"
+        # 設置 Rust 編譯標誌 - 完全靜態鏈接
+        export RUSTFLAGS="-C linker=aarch64-openwrt-linux-musl-gcc -C target-feature=+crt-static -C link-arg=-static"
         export PKG_CONFIG_ALLOW_CROSS=1
         export PKG_CONFIG_SYSROOT_DIR=$STAGING_DIR
         
@@ -145,11 +146,37 @@ jobs:
         
         if [ -f "$BINARY_PATH" ]; then
           echo "✅ Binary found at: $BINARY_PATH"
+          
+          echo ""
+          echo "=== File type ==="
           file "$BINARY_PATH"
-          echo "Binary size:"
+          
+          echo ""
+          echo "=== Binary size ==="
           ls -lh "$BINARY_PATH"
-          echo "Dynamic dependencies:"
-          aarch64-openwrt-linux-musl-objdump -p "$BINARY_PATH" | grep NEEDED || echo "No dynamic dependencies found"
+          
+          echo ""
+          echo "=== ELF header ==="
+          readelf -h "$BINARY_PATH" || echo "readelf not available"
+          
+          echo ""
+          echo "=== Dynamic dependencies ==="
+          readelf -d "$BINARY_PATH" | grep NEEDED || echo "No dynamic dependencies (static binary)"
+          
+          echo ""
+          echo "=== Checking for interpreter ==="
+          readelf -l "$BINARY_PATH" | grep interpreter || echo "No interpreter (fully static)"
+          
+          echo ""
+          echo "=== Symbol information ==="
+          nm -D "$BINARY_PATH" 2>/dev/null | head -20 || echo "No dynamic symbols (static binary)"
+          
+          # 使用 OpenWrt 工具鏈檢查
+          if command -v aarch64-openwrt-linux-musl-readelf &> /dev/null; then
+            echo ""
+            echo "=== OpenWrt toolchain verification ==="
+            aarch64-openwrt-linux-musl-readelf -d "$BINARY_PATH" | grep NEEDED || echo "Static binary"
+          fi
         else
           echo "❌ Binary not found at expected path: $BINARY_PATH"
           echo "Searching for binary in all locations:"
@@ -174,6 +201,25 @@ jobs:
         if [ -f "$BINARY_PATH" ]; then
           echo "binary_exists=true" >> $GITHUB_OUTPUT
           echo "binary_path=$BINARY_PATH" >> $GITHUB_OUTPUT
+          
+          # Strip 二進制文件以減小大小
+          echo ""
+          echo "=== Stripping binary ==="
+          echo "Original size:"
+          ls -lh "$BINARY_PATH"
+          
+          if command -v aarch64-openwrt-linux-musl-strip &> /dev/null; then
+            aarch64-openwrt-linux-musl-strip "$BINARY_PATH"
+            echo "Stripped with OpenWrt toolchain"
+          elif command -v aarch64-linux-gnu-strip &> /dev/null; then
+            aarch64-linux-gnu-strip "$BINARY_PATH"
+            echo "Stripped with GNU toolchain"
+          else
+            echo "No strip tool available, skipping"
+          fi
+          
+          echo "Final size:"
+          ls -lh "$BINARY_PATH"
         else
           echo "binary_exists=false" >> $GITHUB_OUTPUT
         fi
@@ -398,6 +444,31 @@ jobs:
         echo "=== Checking for trafficmon binary ==="
         if tar tzf data.tar.gz | grep -q "usr/bin/trafficmon"; then
           echo "✅ trafficmon binary found in package"
+          
+          # 提取並檢查二進制文件
+          tar xzf data.tar.gz ./usr/bin/trafficmon
+          echo ""
+          echo "=== Binary extracted from IPK ==="
+          file ./usr/bin/trafficmon
+          ls -lh ./usr/bin/trafficmon
+          
+          echo ""
+          echo "=== Checking if binary is static ==="
+          if readelf -d ./usr/bin/trafficmon 2>/dev/null | grep -q NEEDED; then
+            echo "⚠️  Binary has dynamic dependencies:"
+            readelf -d ./usr/bin/trafficmon | grep NEEDED
+          else
+            echo "✅ Binary is statically linked (no dynamic dependencies)"
+          fi
+          
+          echo ""
+          echo "=== Checking interpreter ==="
+          if readelf -l ./usr/bin/trafficmon 2>/dev/null | grep -q interpreter; then
+            echo "⚠️  Binary requires interpreter:"
+            readelf -l ./usr/bin/trafficmon | grep interpreter
+          else
+            echo "✅ Binary does not require interpreter (fully static)"
+          fi
         else
           echo "❌ trafficmon binary NOT found in package"
           exit 1
