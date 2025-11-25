@@ -104,7 +104,6 @@ jobs:
     ls -lh openwrt_bin/
     file openwrt_bin/trafficmon
     
-    # 可選：檢查是否為靜態鏈接（OpenWrt 常需要）
     if command -v ldd &> /dev/null; then
       ldd openwrt_bin/trafficmon || echo "靜態鏈接或無法檢查"
     fi
