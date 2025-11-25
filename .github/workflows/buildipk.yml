@@ -37,8 +37,9 @@ jobs:
           pkg-config \
           libssl-dev \
           libpcap-dev \
-          ar \
-          tar
+          binutils \
+          tar \
+          gzip
 
     - name: Download SDK with axel (multithreaded)
       run: |
