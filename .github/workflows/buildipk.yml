@@ -93,17 +93,33 @@ jobs:
 
     - name: Prepare OpenWrt package
       run: |
-        # Copy pre-built files from repository
-        mkdir -p sdk/package/trafficmon
+        echo "設置 OpenWrt 包..."
+        
+        # 創建目錄結構
+        mkdir -p sdk/package/trafficmon/files/usr/bin
+        mkdir -p sdk/package/trafficmon/files/etc/init.d
+        mkdir -p sdk/package/trafficmon/files/etc/config
+        
+        # 複製 Rust 編譯結果
+        echo "複製 trafficmon 二進制文件..."
+        if [ -f "target/$TARGET/release/trafficmon" ]; then
+          cp target/$TARGET/release/trafficmon sdk/package/trafficmon/files/usr/bin/
+          chmod +x sdk/package/trafficmon/files/usr/bin/trafficmon
+          echo "二進制文件複製成功"
+        else
+          echo "錯誤: 二進制文件不存在"
+          find target/ -name "trafficmon" -type f
+          exit 1
+        fi
+        
+        # 複製配置文件
+        cp openwrt/files/etc/init.d/trafficmon sdk/package/trafficmon/files/etc/init.d/
+        cp openwrt/files/etc/config/trafficmon sdk/package/trafficmon/files/etc/config/
         cp openwrt/Makefile sdk/package/trafficmon/
         
-        # Copy binary and configuration files
-        mkdir -p sdk/package/trafficmon/files
-        cp -r openwrt/files/* sdk/package/trafficmon/files/
+        chmod +x sdk/package/trafficmon/files/etc/init.d/trafficmon
         
-        # Copy the built binary
-        cp openwrt_bin/trafficmon sdk/package/trafficmon/files/usr/bin/
-        chmod +x sdk/package/trafficmon/files/usr/bin/trafficmon
+        echo "包文件準備完成"
 
     - name: Build IPK in OpenWrt SDK
       run: |
