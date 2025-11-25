@@ -66,6 +66,32 @@ jobs:
         printf "[target.%s]\nlinker = \"%s/aarch64-openwrt-linux-musl-gcc\"\nar = \"%s/aarch64-openwrt-linux-musl-ar\"\n" "$TARGET" "$TOOLCHAIN_BIN" "$TOOLCHAIN_BIN" > .cargo/config.toml
         cat .cargo/config.toml
 
+    - name: Check project structure
+      run: |
+        echo "當前目錄結構:"
+        find . -name "*.rs" -o -name "Cargo.toml" | sort
+        echo "src 目錄內容:"
+        ls -la src/ 2>/dev/null || echo "src 目錄不存在"
+        
+    - name: Build Rust binary
+      run: |
+        # 確保在正確的目錄中構建
+        if [ -f "Cargo.toml" ]; then
+          echo "在項目根目錄構建"
+          cargo build --release --target $TARGET
+        elif [ -f "../Cargo.toml" ]; then
+          echo "在子目錄中，切換到根目錄"
+          cd ..
+          cargo build --release --target $TARGET
+        else
+          echo "錯誤: 找不到 Cargo.toml"
+          find . -name "Cargo.toml"
+          exit 1
+        fi
+        
+        mkdir -p openwrt_bin
+        cp target/$TARGET/release/trafficmon openwrt_bin/
+
     - name: Build Rust binary
       run: |
         cargo build --release --target $TARGET
