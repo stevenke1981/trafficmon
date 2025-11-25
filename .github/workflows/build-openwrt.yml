@@ -58,13 +58,11 @@ jobs:
         aria2c -x 16 -s 16 --continue=true $SDK_URL -o sdk.tar.zst
         
         echo "Extracting SDK (zstd format)..."
-        # 使用 zstd 解壓
         unzstd sdk.tar.zst -o sdk.tar || tar -I zstd -xf sdk.tar.zst
         
         echo "Extracting tar archive..."
         tar -xf sdk.tar
         
-        # 找到並重命名 SDK 目錄
         SDK_DIR=$(find . -maxdepth 1 -name "openwrt-sdk-*" -type d | head -1)
         if [ -n "$SDK_DIR" ]; then
           mv "$SDK_DIR" openwrt-sdk
@@ -80,7 +78,6 @@ jobs:
     - name: Set Environment Variables
       run: |
         echo "STAGING_DIR=$GITHUB_WORKSPACE/openwrt-sdk/staging_dir" >> $GITHUB_ENV
-        # SDK 24.10.0 的工具鏈路徑模式
         echo "PATH=$GITHUB_WORKSPACE/openwrt-sdk/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/bin:$PATH" >> $GITHUB_ENV
         echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-openwrt-linux-musl-gcc" >> $GITHUB_ENV
         echo "CC_aarch64-unknown-linux-musl=aarch64-openwrt-linux-musl-gcc" >> $GITHUB_ENV
@@ -106,14 +103,13 @@ jobs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          target
+          src/target
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/src/Cargo.toml', '**/src/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-
 
     - name: Build Rust Binary
       run: |
-        # 設置 Rust 編譯標誌
         export RUSTFLAGS="-C linker=aarch64-openwrt-linux-musl-gcc -C target-feature=-crt-static"
         export PKG_CONFIG_ALLOW_CROSS=1
         export PKG_CONFIG_SYSROOT_DIR=$STAGING_DIR
@@ -122,49 +118,48 @@ jobs:
         echo "RUSTFLAGS: $RUSTFLAGS"
         echo "Working directory: $(pwd)"
         
-        # 顯示完整的 Cargo.toml 內容
         echo "=== Cargo.toml Content ==="
         cat src/Cargo.toml
         
-        # 顯示 Cargo 配置
         cargo --version
         rustc --version
         
-        # 檢查工具鏈
         which aarch64-openwrt-linux-musl-gcc
         aarch64-openwrt-linux-musl-gcc --version
         
-        # 首先驗證 Cargo.toml 語法
         echo "=== Validating Cargo.toml ==="
         cargo check --manifest-path=src/Cargo.toml --target aarch64-unknown-linux-musl --message-format=short || echo "Cargo check failed, but continuing with build..."
         
-        # 構建
         echo "=== Starting Build Process ==="
         cargo build --manifest-path=src/Cargo.toml --release --target aarch64-unknown-linux-musl
         
         echo "=== Build Output ==="
-        find . -name "trafficmon" -type f 2>/dev/null || echo "No binary found"
-        ls -la target/aarch64-unknown-linux-musl/release/ 2>/dev/null || echo "No release directory"
+        echo "Looking for binary in src/target/..."
+        find src/target -name "trafficmon" -type f 2>/dev/null || echo "No binary found"
+        ls -la src/target/aarch64-unknown-linux-musl/release/ 2>/dev/null || echo "No release directory"
 
     - name: Verify Binary Compatibility
       run: |
         echo "=== Binary Verification ==="
-        if [ -f "target/aarch64-unknown-linux-musl/release/trafficmon" ]; then
-          file target/aarch64-unknown-linux-musl/release/trafficmon
+        BINARY_PATH="src/target/aarch64-unknown-linux-musl/release/trafficmon"
+        
+        if [ -f "$BINARY_PATH" ]; then
+          echo "✅ Binary found at: $BINARY_PATH"
+          file "$BINARY_PATH"
           echo "Binary size:"
-          ls -lh target/aarch64-unknown-linux-musl/release/trafficmon
-          # 檢查依賴
+          ls -lh "$BINARY_PATH"
           echo "Dynamic dependencies:"
-          aarch64-openwrt-linux-musl-objdump -p target/aarch64-unknown-linux-musl/release/trafficmon | grep NEEDED || echo "No dynamic dependencies found"
+          aarch64-openwrt-linux-musl-objdump -p "$BINARY_PATH" | grep NEEDED || echo "No dynamic dependencies found"
         else
-          echo "❌ Binary not found!"
+          echo "❌ Binary not found at expected path: $BINARY_PATH"
+          echo "Searching for binary in all locations:"
+          find . -name "trafficmon" -type f 2>/dev/null
           exit 1
         fi
 
     - name: Get Package Metadata
       id: metadata
       run: |
-        # 從 Cargo.toml 獲取版本號
         VERSION=$(grep -m1 '^version' src/Cargo.toml | cut -d'"' -f2)
         if [ -z "$VERSION" ]; then
           VERSION="0.1.0"
@@ -172,108 +167,106 @@ jobs:
         fi
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         
-        # 獲取 Git hash
         GIT_HASH=$(git rev-parse --short HEAD)
         echo "git_hash=$GIT_HASH" >> $GITHUB_OUTPUT
         
-        # 檢查二進制文件是否存在
-        if [ -f "target/aarch64-unknown-linux-musl/release/trafficmon" ]; then
+        BINARY_PATH="src/target/aarch64-unknown-linux-musl/release/trafficmon"
+        if [ -f "$BINARY_PATH" ]; then
           echo "binary_exists=true" >> $GITHUB_OUTPUT
+          echo "binary_path=$BINARY_PATH" >> $GITHUB_OUTPUT
         else
           echo "binary_exists=false" >> $GITHUB_OUTPUT
         fi
         
         echo "Package version: $VERSION"
         echo "Git hash: $GIT_HASH"
-        echo "Binary exists: ${{ steps.metadata.outputs.binary_exists }}"
+        echo "Binary path: $BINARY_PATH"
+        echo "Binary exists: $([ -f "$BINARY_PATH" ] && echo 'true' || echo 'false')"
 
     - name: Prepare OpenWrt Package Structure
       if: steps.metadata.outputs.binary_exists == 'true'
       run: |
         PKG_DIR=openwrt-package
+        BINARY_PATH="${{ steps.metadata.outputs.binary_path }}"
         
-        # 創建標準 OpenWrt 套件目錄結構
         mkdir -p $PKG_DIR/usr/bin
         mkdir -p $PKG_DIR/etc/init.d
         mkdir -p $PKG_DIR/etc/config
         mkdir -p $PKG_DIR/CONTROL
         
-        # 複製二進制文件
         echo "=== Copying Binary ==="
-        cp target/aarch64-unknown-linux-musl/release/trafficmon $PKG_DIR/usr/bin/
+        cp "$BINARY_PATH" $PKG_DIR/usr/bin/
         chmod +x $PKG_DIR/usr/bin/trafficmon
-        echo "✓ Binary copied and made executable"
+        echo "✅ Binary copied and made executable"
         
-        # 複製 init 腳本
-        echo "=== Copying Init Script ==="
+        echo "=== Creating Init Script ==="
         if [ -f "files/trafficmon.init" ]; then
           cp files/trafficmon.init $PKG_DIR/etc/init.d/trafficmon
           chmod +x $PKG_DIR/etc/init.d/trafficmon
-          echo "✓ Init script copied from files/trafficmon.init"
+          echo "✅ Init script copied from files/trafficmon.init"
         else
-          echo "⚠ Init script not found at files/trafficmon.init"
-          # 使用 echo 命令創建 init 腳本
-          echo '#!/bin/sh /etc/rc.common' > $PKG_DIR/etc/init.d/trafficmon
-          echo 'START=99' >> $PKG_DIR/etc/init.d/trafficmon
-          echo 'USE_PROCD=1' >> $PKG_DIR/etc/init.d/trafficmon
-          echo '' >> $PKG_DIR/etc/init.d/trafficmon
-          echo 'start_service() {' >> $PKG_DIR/etc/init.d/trafficmon
-          echo '    procd_open_instance' >> $PKG_DIR/etc/init.d/trafficmon
-          echo '    procd_set_param command /usr/bin/trafficmon' >> $PKG_DIR/etc/init.d/trafficmon
-          echo '    procd_set_param stdout 1' >> $PKG_DIR/etc/init.d/trafficmon
-          echo '    procd_set_param stderr 1' >> $PKG_DIR/etc/init.d/trafficmon
-          echo '    procd_set_param respawn' >> $PKG_DIR/etc/init.d/trafficmon
-          echo '    procd_close_instance' >> $PKG_DIR/etc/init.d/trafficmon
-          echo '}' >> $PKG_DIR/etc/init.d/trafficmon
+          cat > $PKG_DIR/etc/init.d/trafficmon << 'EOF'
+#!/bin/sh /etc/rc.common
+START=99
+USE_PROCD=1
+
+start_service() {
+    procd_open_instance
+    procd_set_param command /usr/bin/trafficmon
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_set_param respawn
+    procd_close_instance
+}
+EOF
           chmod +x $PKG_DIR/etc/init.d/trafficmon
-          echo "✓ Basic init script created"
+          echo "✅ Basic init script created"
         fi
         
-        # 複製配置文件
-        echo "=== Copying Config File ==="
+        echo "=== Creating Config File ==="
         if [ -f "config/trafficmon.conf" ]; then
           cp config/trafficmon.conf $PKG_DIR/etc/config/trafficmon
-          echo "✓ Config file copied from config/trafficmon.conf"
+          echo "✅ Config file copied from config/trafficmon.conf"
         else
-          echo "⚠ Config file not found at config/trafficmon.conf"
-          # 使用 echo 命令創建配置文件
-          echo '# TrafficMon Configuration' > $PKG_DIR/etc/config/trafficmon
-          echo 'config global' >> $PKG_DIR/etc/config/trafficmon
-          echo '    option enabled "1"' >> $PKG_DIR/etc/config/trafficmon
-          echo '    option report_interval "60"' >> $PKG_DIR/etc/config/trafficmon
-          echo '    option log_level "info"' >> $PKG_DIR/etc/config/trafficmon
-          echo '' >> $PKG_DIR/etc/config/trafficmon
-          echo '# Service definitions' >> $PKG_DIR/etc/config/trafficmon
-          echo 'config service "netflix"' >> $PKG_DIR/etc/config/trafficmon
-          echo '    option enabled "0"' >> $PKG_DIR/etc/config/trafficmon
-          echo '    option ports "80,443,1935"' >> $PKG_DIR/etc/config/trafficmon
-          echo '' >> $PKG_DIR/etc/config/trafficmon
-          echo 'config service "youtube"' >> $PKG_DIR/etc/config/trafficmon
-          echo '    option enabled "0"' >> $PKG_DIR/etc/config/trafficmon
-          echo '    option ports "80,443,1935"' >> $PKG_DIR/etc/config/trafficmon
-          echo "✓ Basic config file created"
+          cat > $PKG_DIR/etc/config/trafficmon << 'EOF'
+# TrafficMon Configuration
+config global
+    option enabled "1"
+    option report_interval "60"
+    option log_level "info"
+
+# Service definitions
+config service "netflix"
+    option enabled "0"
+    option ports "80,443,1935"
+
+config service "youtube"
+    option enabled "0"
+    option ports "80,443,1935"
+EOF
+          echo "✅ Basic config file created"
         fi
         
-        # 創建 control 文件 - 使用 printf 避免 EOF 問題
         VERSION="${{ steps.metadata.outputs.version }}"
         GIT_HASH="${{ steps.metadata.outputs.git_hash }}"
         REPOSITORY="${{ github.repository }}"
         MAINTAINER="${{ github.repository_owner }}"
         
-        printf "Package: %s\n" $PACKAGE_NAME > $PKG_DIR/CONTROL/control
-        printf "Version: %s-%s\n" $VERSION $GIT_HASH >> $PKG_DIR/CONTROL/control
-        printf "Depends: libc, libpcap, nftables\n" >> $PKG_DIR/CONTROL/control
-        printf "Source: %s\n" "$REPOSITORY" >> $PKG_DIR/CONTROL/control
-        printf "Section: net\n" >> $PKG_DIR/CONTROL/control
-        printf "Category: Network\n" >> $PKG_DIR/CONTROL/control
-        printf "Priority: optional\n" >> $PKG_DIR/CONTROL/control
-        printf "Architecture: %s\n" $OPENWRT_ARCH >> $PKG_DIR/CONTROL/control
-        printf "Maintainer: %s\n" "$MAINTAINER" >> $PKG_DIR/CONTROL/control
-        printf "Description: Traffic monitoring and filtering tool for OpenWrt\n" >> $PKG_DIR/CONTROL/control
-        printf " Uses nftables for traffic classification and filtering.\n" >> $PKG_DIR/CONTROL/control
-        printf " Built from %s @ %s\n" "$REPOSITORY" $GIT_HASH >> $PKG_DIR/CONTROL/control
+        cat > $PKG_DIR/CONTROL/control << EOF
+Package: $PACKAGE_NAME
+Version: $VERSION-$GIT_HASH
+Depends: libc, libpcap, nftables
+Source: $REPOSITORY
+Section: net
+Category: Network
+Priority: optional
+Architecture: $OPENWRT_ARCH
+Maintainer: $MAINTAINER
+Description: Traffic monitoring and filtering tool for OpenWrt
+ Uses nftables for traffic classification and filtering.
+ Built from $REPOSITORY @ $GIT_HASH
+EOF
         
-        # 顯示套件結構
         echo "=== Package Structure ==="
         find $PKG_DIR -type f | sort
 
@@ -284,25 +277,20 @@ jobs:
         GIT_HASH="${{ steps.metadata.outputs.git_hash }}"
         IPK_NAME="${PACKAGE_NAME}_${VERSION}-${GIT_HASH}_${OPENWRT_ARCH}.ipk"
         
-        # 創建臨時構建目錄
         mkdir -p ipk-build
         
-        # 打包 data.tar.gz (套件內容)
         cd openwrt-package
         echo "Creating data.tar.gz..."
         tar -czf ../ipk-build/data.tar.gz --owner=0 --group=0 .
         cd ..
         
-        # 打包 control.tar.gz (控制信息)
         cd openwrt-package/CONTROL
         echo "Creating control.tar.gz..."
         tar -czf ../../ipk-build/control.tar.gz --owner=0 --group=0 .
         cd ../..
         
-        # 創建 debian-binary 文件
         echo "2.0" > ipk-build/debian-binary
         
-        # 使用 ar 打包成 IPK 文件
         mkdir -p dist
         cd ipk-build
         echo "Creating IPK package..."
@@ -338,7 +326,7 @@ jobs:
         name: ${{ env.PACKAGE_NAME }}-${{ env.OPENWRT_ARCH }}-${{ github.sha }}
         path: |
           dist/*.ipk
-          target/aarch64-unknown-linux-musl/release/trafficmon
+          ${{ steps.metadata.outputs.binary_path }}
         retention-days: 30
 
     - name: Build Failure Notification
@@ -372,8 +360,8 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          artifacts/dist/*.ipk
-          artifacts/trafficmon
+          artifacts/**/*.ipk
+          artifacts/**/trafficmon
         body: |
           # TrafficMon - OpenWrt Traffic Monitoring Package
           
@@ -426,7 +414,7 @@ jobs:
           /etc/init.d/trafficmon restart
           ```
           
-          ## 🔍 Features
+          ## 🎯 Features
           - Traffic monitoring and classification
           - nftables-based filtering
           - Support for Netflix, YouTube and other services
