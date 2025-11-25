@@ -22,11 +22,47 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y build-essential clang llvm pkg-config zstd unzip wget
+          sudo apt install -y build-essential clang llvm pkg-config zstd unzip wget gcc-aarch64-linux-gnu libpcap-dev
 
-      - name: Download OpenWrt SDK
+      - name: Download OpenWrt SDK (multi-threaded & resume supported)
         run: |
-          wget -O sdk.tar.zst "$SDK_URL"
+          SDK_URL="https://downloads.openwrt.org/releases/24.10.0/targets/mediatek/filogic/openwrt-sdk-24.10.0-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
+          FILENAME="sdk.tar.zst"
+
+          # 方法1：使用 aria2（推薦，最快最穩）
+          if ! command -v aria2c &> /dev/null; then
+            sudo apt update && sudo apt install -y aria2
+          fi
+
+          aria2c \
+            --console-log-level=warn \
+            --continue=true \
+            --max-connection-per-server=16 \
+            --max-concurrent-downloads=16 \
+            --split=16 \
+            --min-split-size=1M \
+            --max-tries=0 \
+            --retry-wait=2 \
+            --summary-interval=0 \
+            --download-result=full \
+            -x 16 -s 16 \
+            -o "$FILENAME" \
+            "$SDK_URL"
+
+          # 如果你不想裝 aria2，也可以用下面這個純 curl 多連線方式（8 連線）
+          # 取消註解下面這段即可
+          # ------------------------------------------------------------
+          # if ! command -v curl &> /dev/null; then
+          #   sudo apt install -y curl
+          # fi
+          # curl -L --fail --retry 10 --retry-delay 5 \
+          #      -o "$FILENAME" \
+          #      --parallel --parallel-max 8 \
+          #      "$SDK_URL"
+          # ------------------------------------------------------------
+
+      - name: Extract SDK
+        run: |
           mkdir -p sdk
           tar --use-compress-program=unzstd -xf sdk.tar.zst -C sdk --strip-components=1
 
