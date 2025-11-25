@@ -17,56 +17,62 @@ jobs:
       TARGET_DIR: mediatek/filogic
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: |
-        sudo apt update
-        sudo apt install -y build-essential clang llvm pkg-config zstd unzip
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential clang llvm pkg-config zstd unzip wget
 
-    - name: Download OpenWrt SDK
-      run: |
-        wget -O sdk.tar.zst "$SDK_URL"
-        mkdir sdk
-        tar --use-compress-program=unzstd -xf sdk.tar.zst -C sdk --strip-components=1
+      - name: Download OpenWrt SDK
+        run: |
+          wget -O sdk.tar.zst "$SDK_URL"
+          mkdir -p sdk
+          tar --use-compress-program=unzstd -xf sdk.tar.zst -C sdk --strip-components=1
 
-    - name: Setup SDK environment
-      run: |
-        echo "Setting up OpenWrt SDK environment"
-        echo "STAGING_DIR=$PWD/sdk/staging_dir" >> $GITHUB_ENV
-        echo "TOOLCHAIN_BIN=$PWD/sdk/staging_dir/toolchain-aarch64_generic_gcc-13.3.0_musl/bin" >> $GITHUB_ENV
-        echo "$PWD/sdk/staging_dir/toolchain-aarch64_generic_gcc-13.3.0_musl/bin" >> $GITHUB_PATH
+      - name: Setup SDK environment
+        run: |
+          echo "STAGING_DIR=$PWD/sdk/staging_dir" >> $GITHUB_ENV
+          echo "TOOLCHAIN_BIN=$PWD/sdk/staging_dir/toolchain-aarch64_generic_gcc-13.3.0_musl/bin" >> $GITHUB_ENV
+          echo "$PWD/sdk/staging_dir/toolchain-aarch64_generic_gcc-13.3.0_musl/bin" >> $GITHUB_PATH
 
-    - name: Create Cargo cross toolchain config
-      run: |
-        mkdir -p .cargo
-        cat > .cargo/config.toml << EOF
+      - name: Create Cargo cross toolchain config
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml << 'EOF'
 [target.aarch64-unknown-linux-musl]
 linker = "${{ env.TOOLCHAIN_BIN }}/${{ env.TOOLCHAIN_TRIPLE }}-gcc"
 ar = "${{ env.TOOLCHAIN_BIN }}/${{ env.TOOLCHAIN_TRIPLE }}-ar"
 EOF
 
-    - name: Build Rust binary
-      run: |
-        rustup target add aarch64-unknown-linux-gnu
-        cargo build --release --target aarch64-unknown-linux-gnu
+      - name: Install Rust toolchain and target
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: aarch64-unknown-linux-musl
+          override: true
 
-    - name: Prepare OpenWrt package structure
-      run: |
-        mkdir -p sdk/package/trafficmon/files/usr/bin
-        cp target/aarch64-unknown-linux-gnu/release/trafficmon sdk/package/trafficmon/files/usr/bin/
+      - name: Build Rust binary (cross compile for musl)
+        run: |
+          cargo build --release --target aarch64-unknown-linux-musl
 
-    - name: Create OpenWrt Makefile
-      run: |
-        mkdir -p sdk/package/trafficmon
-        cat > sdk/package/trafficmon/Makefile << EOF
-include \$(TOPDIR)/rules.mk
+      - name: Prepare OpenWrt package structure
+        run: |
+          mkdir -p sdk/package/trafficmon/files/usr/bin
+          cp target/aarch64-unknown-linux-musl/release/trafficmon sdk/package/trafficmon/files/usr/bin/
+
+      - name: Create OpenWrt Makefile
+        run: |
+          mkdir -p sdk/package/trafficmon
+          cat > sdk/package/trafficmon/Makefile << 'EOF'
+include $(TOPDIR)/rules.mk
 
 PKG_NAME:=trafficmon
+PKG_VERSION:=1.0
 PKG_RELEASE:=1
 
-include \$(INCLUDE_DIR)/package.mk
+include $(INCLUDE_DIR)/package.mk
 
 define Package/trafficmon
   SECTION:=utils
@@ -76,26 +82,26 @@ define Package/trafficmon
 endef
 
 define Package/trafficmon/install
-  \$(INSTALL_DIR) \$(1)/usr/bin
-  \$(INSTALL_BIN) ./files/usr/bin/trafficmon \$(1)/usr/bin/
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/files/usr/bin/trafficmon $(1)/usr/bin/
 endef
 
-\$(eval \$(call BuildPackage,trafficmon))
+$(eval $(call BuildPackage,trafficmon))
 EOF
 
-    - name: Compile OpenWrt package
-      run: |
-        cd sdk
-        make package/trafficmon/compile V=s
+      - name: Compile OpenWrt package
+        run: |
+          cd sdk
+          make package/trafficmon/compile V=s -j$(nproc)
 
-    - name: Upload .ipk artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: trafficmon-ipk
-        path: sdk/bin/packages/**/trafficmon_*.ipk
+      - name: Upload .ipk artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trafficmon-ipk
+          path: sdk/bin/targets/**/packages/trafficmon_*.ipk
 
-    - name: Create Release
-      uses: softprops/action-gh-release@v2
-      if: startsWith(github.ref, 'refs/tags/')
-      with:
-        files: sdk/bin/packages/**/trafficmon_*.ipk
+      - name: Create Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: sdk/bin/targets/**/packages/trafficmon_*.ipk
