@@ -14,7 +14,6 @@ jobs:
     env:
       TOOLCHAIN_TRIPLE: aarch64-openwrt-linux-musl
       SDK_URL: https://downloads.openwrt.org/releases/24.10.0/targets/mediatek/filogic/openwrt-sdk-24.10.0-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
-      TARGET_DIR: mediatek/filogic
 
     steps:
       - name: Checkout repository
@@ -40,11 +39,10 @@ jobs:
       - name: Create Cargo cross toolchain config
         run: |
           mkdir -p .cargo
-          cat > .cargo/config.toml << 'EOF'
-[target.aarch64-unknown-linux-musl]
-linker = "${{ env.TOOLCHAIN_BIN }}/${{ env.TOOLCHAIN_TRIPLE }}-gcc"
-ar = "${{ env.TOOLCHAIN_BIN }}/${{ env.TOOLCHAIN_TRIPLE }}-ar"
-EOF
+          printf '[target.aarch64-unknown-linux-musl]\nlinker = "%s/%s-gcc"\nar = "%s/%s-ar"\n' \
+            "${{ env.TOOLCHAIN_BIN }}" "${{ env.TOOLCHAIN_TRIPLE }}" \
+            "${{ env.TOOLCHAIN_BIN }}" "${{ env.TOOLCHAIN_TRIPLE }}" \
+            > .cargo/config.toml
 
       - name: Install Rust toolchain and target
         uses: actions-rs/toolchain@v1
@@ -65,7 +63,7 @@ EOF
       - name: Create OpenWrt Makefile
         run: |
           mkdir -p sdk/package/trafficmon
-          cat > sdk/package/trafficmon/Makefile << 'EOF'
+          cat > sdk/package/trafficmon/Makefile <<'EOFMAKE'
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=trafficmon
@@ -87,7 +85,24 @@ define Package/trafficmon/install
 endef
 
 $(eval $(call BuildPackage,trafficmon))
-EOF
+EOFMAKE
+          # 以下完全用 printf + echo 取代上面的 cat <<'EOFMAKE'
+          printf 'include $(TOPDIR)/rules.mk\n\n' > sdk/package/trafficmon/Makefile
+          printf 'PKG_NAME:=trafficmon\n' >> sdk/package/trafficmon/Makefile
+          printf 'PKG_VERSION:=1.0\n' >> sdk/package/trafficmon/Makefile
+          printf 'PKG_RELEASE:=1\n\n' >> sdk/package/trafficmon/Makefile
+          printf 'include $(INCLUDE_DIR)/package.mk\n\n' >> sdk/package/trafficmon/Makefile
+          printf 'define Package/trafficmon\n' >> sdk/package/trafficmon/Makefile
+          printf '\tSECTION:=utils\n' >> sdk/package/trafficmon/Makefile
+          printf '\tCATEGORY:=Utilities\n' >> sdk/package/trafficmon/Makefile
+          printf '\tTITLE:=Traffic Monitor (Rust)\n' >> sdk/package/trafficmon/Makefile
+          printf '\tDEPENDS:=+libpcap\n' >> sdk/package/trafficmon/Makefile
+          printf 'endef\n\n' >> sdk/package/trafficmon/Makefile
+          printf 'define Package/trafficmon/install\n' >> sdk/package/trafficmon/Makefile
+          printf '\t$(INSTALL_DIR) $(1)/usr/bin\n' >> sdk/package/trafficmon/Makefile
+          printf '\t$(INSTALL_BIN) $(PKG_BUILD_DIR)/files/usr/bin/trafficmon $(1)/usr/bin/\n' >> sdk/package/trafficmon/Makefile
+          printf 'endef\n\n' >> sdk/package/trafficmon/Makefile
+          printf '$(eval $(call BuildPackage,trafficmon))\n' >> sdk/package/trafficmon/Makefile
 
       - name: Compile OpenWrt package
         run: |
