@@ -39,7 +39,8 @@ jobs:
           aria2 \
           jq \
           pkg-config \
-          libssl-dev
+          libssl-dev \
+          libpcap-dev
 
     - name: Cache OpenWrt SDK
       uses: actions/cache@v3
@@ -144,7 +145,7 @@ jobs:
         echo "=== Build Output ==="
         find . -name "trafficmon" -type f 2>/dev/null || echo "No binary found"
         ls -la target/aarch64-unknown-linux-musl/release/ 2>/dev/null || echo "No release directory"
-        
+
     - name: Verify Binary Compatibility
       run: |
         echo "=== Binary Verification ==="
