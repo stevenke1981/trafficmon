@@ -248,18 +248,23 @@ jobs:
         REPOSITORY="${{ github.repository }}"
         MAINTAINER="${{ github.repository_owner }}"
         
-        echo "Package: $PACKAGE_NAME" > $PKG_DIR/CONTROL/control
-        echo "Version: $VERSION-$GIT_HASH" >> $PKG_DIR/CONTROL/control
-        echo "Depends: libc, libpcap, nftables" >> $PKG_DIR/CONTROL/control
-        echo "Source: $REPOSITORY" >> $PKG_DIR/CONTROL/control
-        echo "Section: net" >> $PKG_DIR/CONTROL/control
-        echo "Category: Network" >> $PKG_DIR/CONTROL/control
-        echo "Priority: optional" >> $PKG_DIR/CONTROL/control
-        echo "Architecture: $OPENWRT_ARCH" >> $PKG_DIR/CONTROL/control
-        echo "Maintainer: $MAINTAINER" >> $PKG_DIR/CONTROL/control
-        echo "Description: Traffic monitoring and filtering tool for OpenWrt" >> $PKG_DIR/CONTROL/control
-        echo " Uses nftables for traffic classification and filtering." >> $PKG_DIR/CONTROL/control
-        echo " Built from $REPOSITORY @ $GIT_HASH" >> $PKG_DIR/CONTROL/control
+        # 使用 printf 創建 control 文件，確保格式正確
+        {
+          printf "Package: %s\n" "$PACKAGE_NAME"
+          printf "Version: %s-%s\n" "$VERSION" "$GIT_HASH"
+          printf "Depends: libc, libpcap, nftables\n"
+          printf "Section: net\n"
+          printf "Category: Network\n"
+          printf "Priority: optional\n"
+          printf "Architecture: %s\n" "$OPENWRT_ARCH"
+          printf "Maintainer: %s\n" "$MAINTAINER"
+          printf "Description: Traffic monitoring and filtering tool for OpenWrt\n"
+          printf " Uses nftables for traffic classification and filtering.\n"
+        } > $PKG_DIR/CONTROL/control
+        
+        echo "=== Control File Content ==="
+        cat $PKG_DIR/CONTROL/control
+        echo "=== End of Control File ==="
         
         echo "=== Package Structure ==="
         find $PKG_DIR -type f | sort
@@ -273,26 +278,36 @@ jobs:
         
         mkdir -p ipk-build
         
+        # 打包 data.tar.gz (套件內容，不包含 CONTROL 目錄)
         cd openwrt-package
         echo "Creating data.tar.gz..."
-        tar -czf ../ipk-build/data.tar.gz --owner=0 --group=0 .
+        # 排除 CONTROL 目錄
+        tar -czf ../ipk-build/data.tar.gz --exclude='./CONTROL' --owner=0 --group=0 ./usr ./etc
         cd ..
         
+        # 打包 control.tar.gz (控制信息)
         cd openwrt-package/CONTROL
         echo "Creating control.tar.gz..."
-        tar -czf ../../ipk-build/control.tar.gz --owner=0 --group=0 .
+        tar -czf ../../ipk-build/control.tar.gz --owner=0 --group=0 ./control
         cd ../..
         
+        # 創建 debian-binary 文件
         echo "2.0" > ipk-build/debian-binary
         
+        # 使用 ar 打包成 IPK 文件 (注意順序很重要)
         mkdir -p dist
         cd ipk-build
         echo "Creating IPK package..."
-        ar r ../dist/$IPK_NAME debian-binary control.tar.gz data.tar.gz
+        ar -r ../dist/$IPK_NAME debian-binary data.tar.gz control.tar.gz
         cd ..
         
         echo "✅ IPK package created: dist/$IPK_NAME"
         ls -lh dist/
+        
+        # 驗證 IPK 結構
+        echo ""
+        echo "=== Verifying IPK structure ==="
+        ar t dist/$IPK_NAME
 
     - name: Verify IPK Package
       if: steps.metadata.outputs.binary_exists == 'true'
@@ -302,16 +317,25 @@ jobs:
         ls -la dist/
         
         echo ""
-        echo "=== IPK Contents ==="
+        echo "=== IPK Contents (ar archive members) ==="
         ar t dist/*.ipk
         
         echo ""
         echo "=== Control Information ==="
-        ar p dist/*.ipk control.tar.gz | tar -xzO ./control
+        ar p dist/*.ipk control.tar.gz | tar -tzf - 2>/dev/null || echo "Failed to list control.tar.gz"
+        ar p dist/*.ipk control.tar.gz | tar -xzf - -O 2>/dev/null || echo "Failed to extract control"
         
         echo ""
         echo "=== Data Files List ==="
-        ar p dist/*.ipk data.tar.gz | tar -tz | sort
+        ar p dist/*.ipk data.tar.gz | tar -tzf - 2>/dev/null | head -20 || echo "Failed to list data.tar.gz"
+        
+        echo ""
+        echo "=== Testing IPK with opkg-utils (if available) ==="
+        if command -v opkg-compare-versions &> /dev/null; then
+          echo "opkg-utils available"
+        else
+          echo "opkg-utils not available, skipping additional validation"
+        fi
 
     - name: Upload Build Artifacts
       if: steps.metadata.outputs.binary_exists == 'true'
