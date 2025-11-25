@@ -1,0 +1,139 @@
+name: Build OpenWrt trafficmon with Make
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      OPENWRT_ARCH: aarch64_cortex-a53
+      SDK_URL: https://downloads.openwrt.org/releases/24.10.3/targets/mediatek/filogic/openwrt-sdk-24.10.3-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+      RUST_TARGET: aarch64-unknown-linux-musl
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            build-essential clang llvm \
+            unzip xz-utils zstd axel \
+            gcc-aarch64-linux-gnu \
+            libssl-dev libpcap-dev \
+            file jq pkg-config make tar gzip
+
+      - name: Download and extract OpenWrt SDK (multithreaded)
+        run: |
+          mkdir -p sdk
+          echo "Downloading SDK with axel (8 threads)..."
+          axel -n 8 -o sdk.tar.zst "$SDK_URL"
+          echo "Extracting SDK..."
+          tar -I zstd -xf sdk.tar.zst -C sdk --strip-components=1
+          rm sdk.tar.zst
+
+      - name: Setup toolchain environment
+        run: |
+          echo "STAGING_DIR=$GITHUB_WORKSPACE/sdk/staging_dir" >> $GITHUB_ENV
+          echo "PATH=$GITHUB_WORKSPACE/sdk/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/bin:$PATH" >> $GITHUB_ENV
+
+      - name: Install Rust toolchain (musl target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+          components: rustfmt, clippy
+
+      - name: Create simplified Makefile (works reliably)
+        run: |
+          cat > Makefile << 'EOF'
+RUST_TARGET = aarch64-unknown-linux-musl
+TOOLCHAIN_BIN = sdk/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/bin
+CC_aarch64_unknown_linux_musl = $(TOOLCHAIN_BIN)/aarch64-openwrt-linux-musl-gcc
+RUSTFLAGS = -C linker=$(CC_aarch64_unknown_linux_musl) -C target-feature=-crt-static -C link-arg=-s
+
+.PHONY: all clean package
+
+all: target/$(RUST_TARGET)/release/trafficmon
+
+target/$(RUST_TARGET)/release/trafficmon:
+	RUSTFLAGS="$(RUSTFLAGS)" \
+	cargo build --release --target $(RUST_TARGET)
+
+clean:
+	cargo clean
+
+package: all
+	rm -rf package-ipk
+	mkdir -p package-ipk/trafficmon/usr/bin
+	mkdir -p package-ipk/trafficmon/CONTROL
+
+	cp target/$(RUST_TARGET)/release/trafficmon package-ipk/trafficmon/usr/bin/
+	strip package-ipk/trafficmon/usr/bin/trafficmon || true
+	chmod 755 package-ipk/trafficmon/usr/bin/trafficmon
+
+	cat > package-ipk/trafficmon/CONTROL/control << 'EOL'
+Package: trafficmon
+Version: 0.3.0-1
+Architecture: aarch64_cortex-a53
+Maintainer: GitHub Actions <actions@github.com>
+Section: net
+Priority: optional
+Depends: libc, libpcap
+Description: Rust-based traffic monitoring utility for OpenWrt
+ Monitors network interfaces and provides real-time bandwidth statistics.
+EOL
+
+	# Use official OpenWrt ipkg-build if available
+	if [ -f "sdk/scripts/ipkg-build" ]; then
+	  echo "Building IPK with OpenWrt ipkg-build..."
+	  sdk/scripts/ipkg-build -c -o 0 -g 0 package-ipk/trafficmon artifacts/
+	else
+	  echo "Building IPK manually (ar + tar)..."
+	  mkdir -p artifacts
+	  cd package-ipk/trafficmon
+	  echo "2.0" > ../../artifacts/debian-binary.tmp
+	  tar -czf ../../artifacts/control.tar.gz -C CONTROL .
+	  tar -czf ../../artifacts/data.tar.gz usr
+	  cd ../../artifacts
+	  ar r trafficmon_0.3.0-1_aarch64_cortex-a53.ipk debian-binary.tmp control.tar.gz data.tar.gz
+	  rm debian-binary.tmp
+	fi
+EOF
+
+      - name: Build trafficmon binary
+        run: |
+          export CC_aarch64_unknown_linux_musl=sdk/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/bin/aarch64-openwrt-linux-musl-gcc
+          make -j$(nproc)
+
+      - name: Verify binary
+        run: |
+          file target/aarch64-unknown-linux-musl/release/trafficmon
+          ldd target/aarch64-unknown-linux-musl/release/trafficmon || echo "Statically linked or musl: expected"
+
+      - name: Create IPK package
+        run: |
+          mkdir -p artifacts
+          make package
+
+      - name: List and verify generated IPK
+        run: |
+          echo "=== Final artifacts ==="
+          find artifacts -name "*.ipk" -ls
+          for ipk in artifacts/*.ipk; do
+            [ -f "$ipk" ] || continue
+            echo "Verifying $ipk ..."
+            ar t "$ipk"
+            echo "---"
+          done
+
+      - name: Upload IPK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trafficmon-openwrt-aarch64_cortex-a53
+          path: artifacts/*.ipk
+          if-no-files-found: error
