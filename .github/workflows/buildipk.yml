@@ -165,4 +165,5 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: trafficmon-ipk
-        path: sdk/bin/packages/*/base/*.ipk
+        path: artifacts/*.ipk
+        if-no-files-found: error
