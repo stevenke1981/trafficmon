@@ -10,7 +10,7 @@ define Package/trafficmon
   SECTION:=utils
   CATEGORY:=Utilities
   TITLE:=Traffic Monitoring Tool (Rust)
-  DEPENDS:=+libpcap
+  DEPENDS:=+libpcap +libstdcpp
 endef
 
 define Package/trafficmon/description

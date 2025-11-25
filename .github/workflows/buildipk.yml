@@ -124,12 +124,21 @@ jobs:
     - name: Build IPK in OpenWrt SDK
       run: |
         cd sdk
-        echo "設置默認配置..."
-        make defconfig
+        echo "初始化 SDK 環境..."
         
-        echo "準備編譯 trafficmon 包..."
-        # 跳過缺失的依賴警告
-        make package/trafficmon/compile -j$(nproc) V=s IGNORE_ERRORS=m
+        # 準備必要的配置
+        touch .config
+        echo "CONFIG_ALL=y" >> .config
+        echo "CONFIG_ALL_KMODS=y" >> .config
+        echo "CONFIG_ALL_NONSHARED=y" >> .config
+        
+        # 編譯工具鏈和必要組件
+        echo "編譯工具鏈和必要組件..."
+        make tools/install -j$(nproc)
+        make toolchain/install -j$(nproc)
+        
+        echo "編譯 trafficmon 包..."
+        make package/trafficmon/compile -j$(nproc) V=s
 
     - name: Upload generated IPK
       uses: actions/upload-artifact@v4
