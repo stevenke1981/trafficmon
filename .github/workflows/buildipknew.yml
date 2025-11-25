@@ -1,0 +1,282 @@
+name: Build OpenWrt trafficmon (Rust)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      TARGET: aarch64-unknown-linux-musl
+      OPENWRT_ARCH: aarch64_cortex-a53
+      OPENWRT_TARGET: mediatek/filogic
+      SDK_URL: https://downloads.openwrt.org/releases/24.10.3/targets/mediatek/filogic/openwrt-sdk-24.10.3-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install required packages
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          build-essential \
+          clang \
+          llvm \
+          libc6-dev-i386 \
+          unzip \
+          xz-utils \
+          zstd \
+          gcc-aarch64-linux-gnu \
+          file \
+          aria2 \
+          jq \
+          pkg-config \
+          libssl-dev \
+          libpcap-dev \
+          binutils \
+          tar \
+          gzip
+
+    - name: Download SDK with axel (multithreaded)
+      run: |
+        sudo apt update
+        sudo apt install -y axel zstd
+        
+        mkdir -p sdk
+        SDK_URL="https://downloads.openwrt.org/releases/24.10.3/targets/mediatek/filogic/openwrt-sdk-24.10.3-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
+        
+        echo "Using axel for multithreaded SDK download..."
+        axel -n 8 -o sdk/sdk.tar.zst "$SDK_URL"
+        
+        echo "Extracting SDK..."
+        tar -I zstd -xf sdk/sdk.tar.zst -C sdk --strip-components=1
+        echo "SDK extraction complete"
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Add MUSL target
+      run: rustup target add $TARGET
+
+    - name: Prepare Cargo cross-compile config
+      run: |
+        TOOLCHAIN_BIN="${GITHUB_WORKSPACE}/sdk/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/bin"
+        mkdir -p .cargo
+        printf "[target.%s]\nlinker = \"%s/aarch64-openwrt-linux-musl-gcc\"\nar = \"%s/aarch64-openwrt-linux-musl-ar\"\n" "$TARGET" "$TOOLCHAIN_BIN" "$TOOLCHAIN_BIN" > .cargo/config.toml
+        cat .cargo/config.toml
+
+    - name: Check project structure
+      run: |
+        echo "Current directory structure:"
+        find . -name "*.rs" -o -name "Cargo.toml" | sort
+        echo "src directory contents:"
+        ls -la src/ 2>/dev/null || echo "src directory does not exist"
+
+    - name: Build with dynamic linking
+      run: |
+        echo "Building with dynamic linking..."
+        cargo clean
+        RUSTFLAGS="-C target-feature=-crt-static" cargo build --release --target $TARGET
+
+    - name: Verify binary file
+      run: |
+        echo "Verifying binary file..."
+        file target/$TARGET/release/trafficmon
+        ls -la target/$TARGET/release/trafficmon
+        readelf -h target/$TARGET/release/trafficmon || echo "Not a valid ELF file"
+
+    - name: Verify control file format
+      run: |
+        echo "=== Checking control file ==="
+        if [ ! -f "openwrt/CONTROL/control" ]; then
+          echo "ERROR: openwrt/CONTROL/control not found!"
+          exit 1
+        fi
+        
+        echo "Original control file contents:"
+        cat openwrt/CONTROL/control
+        echo ""
+        
+        # Fix Architecture field to match the actual target
+        echo "Updating Architecture field to match target..."
+        sed -i "s/^Architecture:.*/Architecture: $OPENWRT_ARCH/" openwrt/CONTROL/control
+        
+        echo "Updated control file contents:"
+        cat openwrt/CONTROL/control
+        echo ""
+        
+        echo "Checking for required fields:"
+        grep -q "^Package:" openwrt/CONTROL/control && echo "✓ Package field found" || (echo "✗ Package field missing" && exit 1)
+        grep -q "^Version:" openwrt/CONTROL/control && echo "✓ Version field found" || (echo "✗ Version field missing" && exit 1)
+        grep -q "^Architecture:" openwrt/CONTROL/control && echo "✓ Architecture field found" || (echo "✗ Architecture field missing" && exit 1)
+        
+        # Verify Architecture matches
+        ARCH_IN_FILE=$(grep "^Architecture:" openwrt/CONTROL/control | cut -d' ' -f2)
+        if [ "$ARCH_IN_FILE" != "$OPENWRT_ARCH" ]; then
+          echo "ERROR: Architecture mismatch!"
+          echo "Expected: $OPENWRT_ARCH"
+          echo "Found: $ARCH_IN_FILE"
+          exit 1
+        fi
+        echo "✓ Architecture matches: $OPENWRT_ARCH"
+        
+        echo ""
+        echo "Checking file format:"
+        file openwrt/CONTROL/control
+        
+        # Check for Windows line endings
+        if file openwrt/CONTROL/control | grep -q "CRLF"; then
+          echo "WARNING: Control file has Windows line endings (CRLF), converting to Unix (LF)..."
+          sed -i 's/\r$//' openwrt/CONTROL/control
+        fi
+
+- name: Create IPK using OpenWrt tools
+  run: |
+    echo "Using OpenWrt SDK to build IPK..."
+    
+    cd sdk
+    
+    # Update feeds
+    ./scripts/feeds update -a
+    ./scripts/feeds install -a
+    
+    # Prepare package
+    mkdir -p package/trafficmon
+    cp -r ../openwrt/* package/trafficmon/
+    
+    # Copy binary
+    mkdir -p package/trafficmon/files/usr/bin
+    cp ../target/$TARGET/release/trafficmon package/trafficmon/files/usr/bin/
+    
+    # Build using SDK
+    make package/trafficmon/compile V=s
+    
+    # Find and copy IPK
+    find bin/ -name "trafficmon*.ipk" -exec cp {} ../artifacts/ \;
+
+    - name: Compare with reference IPK
+      run: |
+        echo "=== Downloading reference IPK for comparison ==="
+        mkdir -p reference
+        cd reference
+        
+        # Download a known-good IPK from OpenWrt repository
+        wget -q "https://downloads.openwrt.org/releases/24.10.3/packages/aarch64_cortex-a53/base/busybox_1.36.1-3_aarch64_cortex-a53.ipk" || echo "Failed to download reference"
+        
+        if [ -f "busybox_1.36.1-3_aarch64_cortex-a53.ipk" ]; then
+          echo "Reference IPK downloaded successfully"
+          
+          echo "=== Reference IPK structure ==="
+          ar -t busybox_1.36.1-3_aarch64_cortex-a53.ipk
+          
+          echo ""
+          echo "=== Our IPK structure ==="
+          ar -t "${GITHUB_WORKSPACE}/artifacts/trafficmon_0.3.0-1_${OPENWRT_ARCH}.ipk"
+          
+          echo ""
+          echo "=== Extracting reference IPK ==="
+          mkdir ref_extract
+          cd ref_extract
+          ar -x ../busybox_1.36.1-3_aarch64_cortex-a53.ipk
+          
+          echo "Reference debian-binary:"
+          cat debian-binary | od -c
+          
+          echo ""
+          echo "Reference control.tar.gz test:"
+          tar -tzf control.tar.gz | head -5
+          
+          echo ""
+          echo "=== Extracting our IPK ==="
+          cd ..
+          mkdir our_extract
+          cd our_extract
+          ar -x "${GITHUB_WORKSPACE}/artifacts/trafficmon_0.3.0-1_${OPENWRT_ARCH}.ipk"
+          
+          echo "Our debian-binary:"
+          cat debian-binary | od -c
+          
+          echo ""
+          echo "Our control.tar.gz test:"
+          tar -tzf control.tar.gz | head -5
+          
+          echo ""
+          echo "=== File format comparison ==="
+          echo "Reference control.tar.gz:"
+          file ../ref_extract/control.tar.gz
+          echo "Our control.tar.gz:"
+          file control.tar.gz
+          
+          echo ""
+          echo "Reference data.tar.gz:"
+          file ../ref_extract/data.tar.gz
+          echo "Our data.tar.gz:"
+          file data.tar.gz
+        fi
+        
+        cd "${GITHUB_WORKSPACE}"
+        rm -rf reference
+
+    - name: Verify IPK package structure
+      run: |
+        echo "Verifying IPK package structure..."
+        
+        mkdir -p ipk_inspect
+        cd ipk_inspect
+        
+        cp ../artifacts/trafficmon_0.3.0-1_${OPENWRT_ARCH}.ipk .
+        
+        echo "=== 1. Extract IPK with ar ==="
+        ar x trafficmon_0.3.0-1_${OPENWRT_ARCH}.ipk
+        
+        echo "=== 2. Check extracted files ==="
+        ls -la
+        
+        echo "=== 3. Check debian-binary ==="
+        if [ -f "debian-binary" ]; then
+          cat debian-binary
+        else
+          echo "ERROR: debian-binary missing"
+          exit 1
+        fi
+        
+        echo "=== 4. Check control.tar.gz ==="
+        if [ -f "control.tar.gz" ]; then
+          echo "control.tar.gz contents:"
+          tar -tzf control.tar.gz
+          echo ""
+          echo "control file contents:"
+          tar -xzf control.tar.gz -O ./control
+        else
+          echo "ERROR: control.tar.gz missing"
+          exit 1
+        fi
+        
+        echo "=== 5. Check data.tar.gz ==="
+        if [ -f "data.tar.gz" ]; then
+          echo "data.tar.gz contents:"
+          tar -tzf data.tar.gz | head -20
+          echo ""
+          echo "Binary file info:"
+          tar -xzf data.tar.gz ./usr/bin/trafficmon
+          file ./usr/bin/trafficmon
+          ls -lh ./usr/bin/trafficmon
+        else
+          echo "ERROR: data.tar.gz missing"
+          exit 1
+        fi
+        
+        cd ..
+        rm -rf ipk_inspect
+
+    - name: Upload generated IPK
+      uses: actions/upload-artifact@v4
+      with:
+        name: trafficmon-ipk
+        path: artifacts/*.ipk
+        if-no-files-found: error
