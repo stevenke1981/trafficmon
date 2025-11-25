@@ -73,19 +73,17 @@ jobs:
         echo "src 目錄內容:"
         ls -la src/ 2>/dev/null || echo "src 目錄不存在"
         
-    - name: Build Rust binary
+    - name: Build Rust binary (alternative approach)
       run: |
-        echo "當前工作目錄: $(pwd)"
-        echo "檢查 Cargo.toml..."
-        ls -la Cargo.toml
-        echo "檢查 src 目錄..."
-        ls -la src/
+        echo "嘗試直接編譯..."
+        # 直接使用 rustc 編譯（繞過 Cargo）
+        rustc --version
+        ls -la src/main.rs
         
-        # 清理可能的構建緩存問題
-        cargo clean
+        # 先檢查 Cargo 是否能正常運行
+        cargo check --verbose
         
-        # 嘗試構建
-        echo "開始構建..."
+        # 如果 cargo check 成功，再嘗試構建
         cargo build --release --target $TARGET
         mkdir -p openwrt_bin
         cp target/$TARGET/release/trafficmon openwrt_bin/
