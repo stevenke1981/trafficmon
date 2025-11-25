@@ -176,3 +176,61 @@ jobs:
         name: trafficmon-ipk
         path: artifacts/*.ipk
         if-no-files-found: error
+
+    - name: Verify IPK package structure
+      run: |
+        echo "檢驗 IPK 包結構..."
+        
+        # 創建檢驗目錄
+        mkdir -p ipk_inspect
+        
+        # 進入目錄
+        cd ipk_inspect
+        
+        # 複製 IPK 文件
+        cp ../artifacts/trafficmon_0.3.0-1_aarch64_cortex-a53.ipk .
+        
+        echo "=== 1. 使用 ar 解包 ==="
+        ar x trafficmon_0.3.0-1_aarch64_cortex-a53.ipk
+        
+        echo "=== 2. 檢查解包後的文件 ==="
+        ls -la
+        
+        echo "=== 3. 檢查 debian-binary ==="
+        if [ -f "debian-binary" ]; then
+          cat debian-binary
+        else
+          echo "錯誤: 缺少 debian-binary 文件"
+        fi
+        
+        echo "=== 4. 檢查 control.tar.gz ==="
+        if [ -f "control.tar.gz" ]; then
+          echo "control.tar.gz 內容:"
+          tar -tzf control.tar.gz
+          echo ""
+          echo "control 文件內容:"
+          tar -xzf control.tar.gz -O ./control 2>/dev/null || tar -xzf control.tar.gz -O ./CONTROL/control 2>/dev/null || echo "無法讀取 control 文件"
+        else
+          echo "錯誤: 缺少 control.tar.gz 文件"
+        fi
+        
+        echo "=== 5. 檢查 data.tar.gz ==="
+        if [ -f "data.tar.gz" ]; then
+          echo "data.tar.gz 內容:"
+          tar -tzf data.tar.gz
+          echo ""
+          echo "二進制文件信息:"
+          tar -xzf data.tar.gz -O ./usr/bin/trafficmon 2>/dev/null | file - || echo "無法讀取二進制文件"
+        else
+          echo "錯誤: 缺少 data.tar.gz 文件"
+        fi
+        
+        echo "=== 6. 完整的文件樹 ==="
+        if [ -f "data.tar.gz" ]; then
+          echo "完整的文件結構:"
+          tar -tzf data.tar.gz | sort
+        fi
+        
+        # 清理
+        cd ..
+        rm -rf ipk_inspect
