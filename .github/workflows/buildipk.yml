@@ -22,14 +22,36 @@ jobs:
     - name: Install required packages
       run: |
         sudo apt update
-        sudo apt install -y build-essential clang llvm libssl-dev pkg-config zstd
+        sudo apt install -y \
+          build-essential \
+          clang \
+          llvm \
+          libc6-dev-i386 \
+          unzip \
+          xz-utils \
+          zstd \
+          gcc-aarch64-linux-gnu \
+          file \
+          aria2 \
+          jq \
+          pkg-config \
+          libssl-dev \
+          libpcap-dev
 
-    - name: Download and extract OpenWrt SDK
+    - name: Download SDK with axel (multithreaded)
       run: |
+        sudo apt update
+        sudo apt install -y axel zstd
+        
         mkdir -p sdk
-        wget -O sdk/sdk.tar.zst "$SDK_URL"
+        SDK_URL="https://downloads.openwrt.org/releases/24.10.0/targets/mediatek/filogic/openwrt-sdk-24.10.0-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
+        
+        echo "使用 axel 多線程下載 SDK..."
+        axel -n 8 -o sdk/sdk.tar.zst "$SDK_URL"
+        
+        echo "開始解壓縮 SDK..."
         tar -I zstd -xf sdk/sdk.tar.zst -C sdk --strip-components=1
-        echo "SDK extracted"
+        echo "SDK 解壓縮完成"
 
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
