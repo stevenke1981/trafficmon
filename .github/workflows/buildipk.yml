@@ -1,138 +1,109 @@
-name: Build OpenWrt Package
+name: Build OpenWrt trafficmon (Rust)
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ "main", "master" ]
-  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     env:
-      TOOLCHAIN_TRIPLE: aarch64-openwrt-linux-musl
+      TARGET: aarch64-unknown-linux-musl
+      OPENWRT_TARGET: mediatek/filogic
       SDK_URL: https://downloads.openwrt.org/releases/24.10.0/targets/mediatek/filogic/openwrt-sdk-24.10.0-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y build-essential clang llvm pkg-config zstd unzip wget gcc-aarch64-linux-gnu libpcap-dev
+    - name: Install required packages
+      run: |
+        sudo apt update
+        sudo apt install -y build-essential clang llvm libssl-dev pkg-config zstd
 
-      - name: Download OpenWrt SDK (multi-threaded & resume supported)
-        run: |
-          SDK_URL="https://downloads.openwrt.org/releases/24.10.0/targets/mediatek/filogic/openwrt-sdk-24.10.0-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
-          FILENAME="sdk.tar.zst"
+    - name: Download and extract OpenWrt SDK
+      run: |
+        mkdir -p sdk
+        wget -O sdk/sdk.tar.zst "${{ env.SDK_URL }}"
+        tar -I zstd -xf sdk/sdk.tar.zst -C sdk --strip-components=1
+        echo "SDK extracted"
 
-          # 方法1：使用 aria2（推薦，最快最穩）
-          if ! command -v aria2c &> /dev/null; then
-            sudo apt update && sudo apt install -y aria2
-          fi
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
 
-          aria2c \
-            --console-log-level=warn \
-            --continue=true \
-            --max-connection-per-server=16 \
-            --max-concurrent-downloads=16 \
-            --split=16 \
-            --min-split-size=1M \
-            --max-tries=0 \
-            --retry-wait=2 \
-            --summary-interval=0 \
-            --download-result=full \
-            -x 16 -s 16 \
-            -o "$FILENAME" \
-            "$SDK_URL"
+    - name: Add MUSL target
+      run: rustup target add $TARGET
 
-          # 如果你不想裝 aria2，也可以用下面這個純 curl 多連線方式（8 連線）
-          # 取消註解下面這段即可
-          # ------------------------------------------------------------
-          # if ! command -v curl &> /dev/null; then
-          #   sudo apt install -y curl
-          # fi
-          # curl -L --fail --retry 10 --retry-delay 5 \
-          #      -o "$FILENAME" \
-          #      --parallel --parallel-max 8 \
-          #      "$SDK_URL"
-          # ------------------------------------------------------------
+    - name: Prepare Cargo cross-compile config
+      run: |
+        TOOLCHAIN_BIN="${GITHUB_WORKSPACE}/sdk/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/bin"
+        mkdir -p .cargo
+        printf "%s\n" \
+"[target.aarch64-unknown-linux-musl]" \
+"linker = \"$TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-gcc\"" \
+"ar = \"$TOOLCHAIN_BIN/aarch64-openwrt-linux-musl-ar\"" \
+        > .cargo/config.toml
+        cat .cargo/config.toml
 
-      - name: Extract SDK
-        run: |
-          mkdir -p sdk
-          tar --use-compress-program=unzstd -xf sdk.tar.zst -C sdk --strip-components=1
+    - name: Build Rust binary
+      run: |
+        cargo build --release --target $TARGET
+        mkdir -p openwrt_bin
+        cp target/$TARGET/release/trafficmon openwrt_bin/
 
-      - name: Setup SDK environment
-        run: |
-          echo "STAGING_DIR=$PWD/sdk/staging_dir" >> $GITHUB_ENV
-          echo "TOOLCHAIN_BIN=$PWD/sdk/staging_dir/toolchain-aarch64_generic_gcc-13.3.0_musl/bin" >> $GITHUB_ENV
-          echo "$PWD/sdk/staging_dir/toolchain-aarch64_generic_gcc-13.3.0_musl/bin" >> $GITHUB_PATH
+    - name: Prepare OpenWrt package structure
+      run: |
+        mkdir -p sdk/package/trafficmon
+        mkdir -p sdk/package/trafficmon/files/usr/bin
+        cp openwrt_bin/trafficmon sdk/package/trafficmon/files/usr/bin/
 
-      - name: Create Cargo cross toolchain config
-        run: |
-          mkdir -p .cargo
-          printf '[target.aarch64-unknown-linux-musl]\n' > .cargo/config.toml
-          printf 'linker = "%s/%s-gcc"\n' "${{ env.TOOLCHAIN_BIN }}" "${{ env.TOOLCHAIN_TRIPLE }}" >> .cargo/config.toml
-          printf 'ar = "%s/%s-ar"\n' "${{ env.TOOLCHAIN_BIN }}" "${{ env.TOOLCHAIN_TRIPLE }}" >> .cargo/config.toml
+        mkdir -p sdk/package/trafficmon/files/etc/init.d
+        cp files/trafficemon.init sdk/package/trafficmon/files/etc/init.d/trafficmon
+        chmod +x sdk/package/trafficmon/files/etc/init.d/trafficmon
 
-      - name: Install Rust toolchain and target
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          target: aarch64-unknown-linux-musl
-          override: true
+        mkdir -p sdk/package/trafficmon/files/etc/config
+        cp config/trafficmon.conf sdk/package/trafficmon/files/etc/config/trafficmon
 
-      - name: Build Rust binary
-        run: |
-          cargo build --release --target aarch64-unknown-linux-musl
+        # Create Makefile
+        printf "%s\n" \
+"include \$(TOPDIR)/rules.mk" \
+"" \
+"PKG_NAME:=trafficmon" \
+"PKG_VERSION:=0.3.0" \
+"PKG_RELEASE:=1" \
+"" \
+"include \$(INCLUDE_DIR)/package.mk" \
+"" \
+"define Package/trafficmon" \
+"  SECTION:=utils" \
+"  CATEGORY:=Utilities" \
+"  TITLE:=Traffic Monitoring Tool (Rust)" \
+"  DEPENDS:=+libpcap" \
+"endef" \
+"" \
+"define Package/trafficmon/install" \
+"  \$(INSTALL_DIR) \$(1)/usr/bin" \
+"  \$(INSTALL_BIN) ./files/usr/bin/trafficmon \$(1)/usr/bin/" \
+"" \
+"  \$(INSTALL_DIR) \$(1)/etc/init.d" \
+"  \$(INSTALL_BIN) ./files/etc/init.d/trafficmon \$(1)/etc/init.d/" \
+"" \
+"  \$(INSTALL_DIR) \$(1)/etc/config" \
+"  \$(INSTALL_CONF) ./files/etc/config/trafficmon \$(1)/etc/config/trafficmon" \
+"endef" \
+"" \
+"\$(eval \$(call BuildPackage,trafficmon))" \
+        > sdk/package/trafficmon/Makefile
 
-      - name: Prepare package structure
-        run: |
-          mkdir -p sdk/package/trafficmon/files/usr/bin
-          cp target/aarch64-unknown-linux-musl/release/trafficmon sdk/package/trafficmon/files/usr/bin/
+    - name: Build IPK in OpenWrt SDK
+      run: |
+        cd sdk
+        make package/trafficmon/compile V=s
 
-      - name: Create OpenWrt Makefile using only printf and echo
-        run: |
-          mkdir -p sdk/package/trafficmon
-          printf 'include $(TOPDIR)/rules.mk\n' > sdk/package/trafficmon/Makefile
-          printf '\n' >> sdk/package/trafficmon/Makefile
-          printf 'PKG_NAME:=trafficmon\n' >> sdk/package/trafficmon/Makefile
-          printf 'PKG_VERSION:=1.0\n' >> sdk/package/trafficmon/Makefile
-          printf 'PKG_RELEASE:=1\n' >> sdk/package/trafficmon/Makefile
-          printf '\n' >> sdk/package/trafficmon/Makefile
-          printf 'include $(INCLUDE_DIR)/package.mk\n' >> sdk/package/trafficmon/Makefile
-          printf '\n' >> sdk/package/trafficmon/Makefile
-          printf 'define Package/trafficmon\n' >> sdk/package/trafficmon/Makefile
-          printf '\tSECTION:=utils\n' >> sdk/package/trafficmon/Makefile
-          printf '\tCATEGORY:=Utilities\n' >> sdk/package/trafficmon/Makefile
-          printf '\tTITLE:=Traffic Monitor (Rust)\n' >> sdk/package/trafficmon/Makefile
-          printf '\tDEPENDS:=+libpcap\n' >> sdk/package/trafficmon/Makefile
-          printf 'endef\n' >> sdk/package/trafficmon/Makefile
-          printf '\n' >> sdk/package/trafficmon/Makefile
-          printf 'define Package/trafficmon/install\n' >> sdk/package/trafficmon/Makefile
-          printf '\t$(INSTALL_DIR) $(1)/usr/bin\n' >> sdk/package/trafficmon/Makefile
-          printf '\t$(INSTALL_BIN) $(PKG_BUILD_DIR)/files/usr/bin/trafficmon $(1)/usr/bin/\n' >> sdk/package/trafficmon/Makefile
-          printf 'endef\n' >> sdk/package/trafficmon/Makefile
-          printf '\n' >> sdk/package/trafficmon/Makefile
-          printf '$(eval $(call BuildPackage,trafficmon))\n' >> sdk/package/trafficmon/Makefile
-
-      - name: Compile OpenWrt package
-        run: |
-          cd sdk
-          make package/trafficmon/compile V=s -j$(nproc)
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: trafficmon-ipk
-          path: sdk/bin/targets/**/packages/trafficmon_*.ipk
-
-      - name: Create Release on tag
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: sdk/bin/targets/**/packages/trafficmon_*.ipk
+    - name: Upload generated IPK
+      uses: actions/upload-artifact@v4
+      with:
+        name: trafficmon-ipk
+        path: sdk/bin/packages/*/base/*.ipk
