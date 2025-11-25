@@ -1,0 +1,99 @@
+name: Build OpenWrt Package
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      TOOLCHAIN_TRIPLE: aarch64-openwrt-linux-musl
+      SDK_URL: https://downloads.openwrt.org/releases/24.10.0/targets/mediatek/filogic/openwrt-sdk-24.10.0-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+      TARGET_DIR: mediatek/filogic
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y build-essential clang llvm pkg-config zstd unzip
+
+    - name: Download OpenWrt SDK
+      run: |
+        wget -O sdk.tar.zst "$SDK_URL"
+        mkdir sdk
+        tar --use-compress-program=unzstd -xf sdk.tar.zst -C sdk --strip-components=1
+
+    - name: Setup SDK environment
+      run: |
+        echo "Setting up OpenWrt SDK environment"
+        echo "STAGING_DIR=$PWD/sdk/staging_dir" >> $GITHUB_ENV
+        echo "TOOLCHAIN_BIN=$PWD/sdk/staging_dir/toolchain-aarch64_generic_gcc-13.3.0_musl/bin" >> $GITHUB_ENV
+        echo "$PWD/sdk/staging_dir/toolchain-aarch64_generic_gcc-13.3.0_musl/bin" >> $GITHUB_PATH
+
+    - name: Create Cargo cross toolchain config
+      run: |
+        mkdir -p .cargo
+        cat <<EOF > .cargo/config.toml
+[target.aarch64-unknown-linux-gnu]
+linker = "${{ env.TOOLCHAIN_BIN }}/${{ env.TOOLCHAIN_TRIPLE }}-gcc"
+ar = "${{ env.TOOLCHAIN_BIN }}/${{ env.TOOLCHAIN_TRIPLE }}-ar"
+EOF
+        cat .cargo/config.toml
+
+    - name: Build Rust binary
+      run: |
+        rustup target add aarch64-unknown-linux-gnu
+        cargo build --release --target aarch64-unknown-linux-gnu
+
+    - name: Prepare OpenWrt package structure
+      run: |
+        mkdir -p sdk/package/trafficmon/files/usr/bin
+        cp target/aarch64-unknown-linux-gnu/release/trafficmon sdk/package/trafficmon/files/usr/bin/
+
+        # 建立最小可用的 OpenWrt Makefile
+        cat <<EOF > sdk/package/trafficmon/Makefile
+include \$(TOPDIR)/rules.mk
+
+PKG_NAME:=trafficmon
+PKG_RELEASE:=1
+
+include \$(INCLUDE_DIR)/package.mk
+
+define Package/trafficmon
+  SECTION:=utils
+  CATEGORY:=Utilities
+  TITLE:=Traffic Monitor (Rust)
+endef
+
+define Package/trafficmon/install
+	\$(INSTALL_DIR) \$(1)/usr/bin
+	\$(INSTALL_BIN) ./files/usr/bin/trafficmon \$(1)/usr/bin/
+endef
+
+\$(eval \$(call BuildPackage,trafficmon))
+EOF
+
+    - name: Compile OpenWrt package
+      run: |
+        cd sdk
+        make package/trafficmon/compile V=s
+
+    - name: Upload .ipk artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: trafficmon-ipk
+        path: sdk/bin/packages/**/trafficmon_*.ipk
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: sdk/bin/packages/**/trafficmon_*.ipk
