@@ -4,12 +4,7 @@ use std::thread;
 use std::time::Duration;
 use std::collections::HashMap;
 
-// 導入可能存在的 nftables 模塊
-#[cfg(feature = "nftables")]
-mod nftables;
-
-// 如果沒有單獨的 nftables.rs,我們在這裡定義
-#[cfg(not(feature = "nftables"))]
+// 定義 nftables 模塊
 mod nftables {
     use std::collections::HashMap;
     use serde::{Deserialize, Serialize};
