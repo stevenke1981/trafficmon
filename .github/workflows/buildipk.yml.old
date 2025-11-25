@@ -49,12 +49,12 @@ jobs:
         mkdir -p sdk
         SDK_URL="https://downloads.openwrt.org/releases/24.10.3/targets/mediatek/filogic/openwrt-sdk-24.10.3-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
         
-        echo "Using axel for multithreaded SDK download..."
+        echo "使用 axel 多線程下載 SDK..."
         axel -n 8 -o sdk/sdk.tar.zst "$SDK_URL"
         
-        echo "Extracting SDK..."
+        echo "開始解壓縮 SDK..."
         tar -I zstd -xf sdk/sdk.tar.zst -C sdk --strip-components=1
-        echo "SDK extraction complete"
+        echo "SDK 解壓縮完成"
 
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
@@ -71,23 +71,57 @@ jobs:
 
     - name: Check project structure
       run: |
-        echo "Current directory structure:"
+        echo "當前目錄結構:"
         find . -name "*.rs" -o -name "Cargo.toml" | sort
-        echo "src directory contents:"
-        ls -la src/ 2>/dev/null || echo "src directory does not exist"
+        echo "src 目錄內容:"
+        ls -la src/ 2>/dev/null || echo "src 目錄不存在"
 
     - name: Build with dynamic linking
       run: |
-        echo "Building with dynamic linking..."
+        echo "嘗試動態鏈接..."
+        # 清理之前的構建
         cargo clean
+        # 使用動態鏈接
         RUSTFLAGS="-C target-feature=-crt-static" cargo build --release --target $TARGET
 
     - name: Verify binary file
       run: |
-        echo "Verifying binary file..."
+        echo "驗證二進制文件..."
         file target/$TARGET/release/trafficmon
         ls -la target/$TARGET/release/trafficmon
-        readelf -h target/$TARGET/release/trafficmon || echo "Not a valid ELF file"
+        
+        # 檢查是否為有效的 ELF 文件
+        readelf -h target/$TARGET/release/trafficmon || echo "不是有效的 ELF 文件"
+
+    - name: Prepare OpenWrt package
+      run: |
+        echo "設置 OpenWrt 包..."
+        
+        # 創建目錄結構
+        mkdir -p sdk/package/trafficmon/files/usr/bin
+        mkdir -p sdk/package/trafficmon/files/etc/init.d
+        mkdir -p sdk/package/trafficmon/files/etc/config
+        
+        # 複製 Rust 編譯結果
+        echo "複製 trafficmon 二進制文件..."
+        if [ -f "target/$TARGET/release/trafficmon" ]; then
+          cp target/$TARGET/release/trafficmon sdk/package/trafficmon/files/usr/bin/
+          chmod +x sdk/package/trafficmon/files/usr/bin/trafficmon
+          echo "二進制文件複製成功"
+        else
+          echo "錯誤: 二進制文件不存在"
+          find target/ -name "trafficmon" -type f
+          exit 1
+        fi
+        
+        # 複製配置文件
+        cp openwrt/files/etc/init.d/trafficmon sdk/package/trafficmon/files/etc/init.d/
+        cp openwrt/files/etc/config/trafficmon sdk/package/trafficmon/files/etc/config/
+        cp openwrt/Makefile sdk/package/trafficmon/
+        
+        chmod +x sdk/package/trafficmon/files/etc/init.d/trafficmon
+        
+        echo "包文件準備完成"
 
     - name: Create IPK package
       run: |
@@ -138,61 +172,67 @@ jobs:
         echo "IPK created successfully:"
         ls -lh artifacts/
 
-    - name: Verify IPK package structure
-      run: |
-        echo "Verifying IPK package structure..."
-        
-        mkdir -p ipk_inspect
-        cd ipk_inspect
-        
-        cp ../artifacts/trafficmon_0.3.0-1_aarch64_cortex-a53.ipk .
-        
-        echo "=== 1. Extract IPK with ar ==="
-        ar x trafficmon_0.3.0-1_aarch64_cortex-a53.ipk
-        
-        echo "=== 2. Check extracted files ==="
-        ls -la
-        
-        echo "=== 3. Check debian-binary ==="
-        if [ -f "debian-binary" ]; then
-          cat debian-binary
-        else
-          echo "ERROR: debian-binary missing"
-          exit 1
-        fi
-        
-        echo "=== 4. Check control.tar.gz ==="
-        if [ -f "control.tar.gz" ]; then
-          echo "control.tar.gz contents:"
-          tar -tzf control.tar.gz
-          echo ""
-          echo "control file contents:"
-          tar -xzf control.tar.gz -O ./control
-        else
-          echo "ERROR: control.tar.gz missing"
-          exit 1
-        fi
-        
-        echo "=== 5. Check data.tar.gz ==="
-        if [ -f "data.tar.gz" ]; then
-          echo "data.tar.gz contents:"
-          tar -tzf data.tar.gz | head -20
-          echo ""
-          echo "Binary file info:"
-          tar -xzf data.tar.gz ./usr/bin/trafficmon
-          file ./usr/bin/trafficmon
-          ls -lh ./usr/bin/trafficmon
-        else
-          echo "ERROR: data.tar.gz missing"
-          exit 1
-        fi
-        
-        cd ..
-        rm -rf ipk_inspect
-
     - name: Upload generated IPK
       uses: actions/upload-artifact@v4
       with:
         name: trafficmon-ipk
         path: artifacts/*.ipk
         if-no-files-found: error
+
+    - name: Verify IPK package structure
+      run: |
+        echo "檢驗 IPK 包結構..."
+        
+        # 創建檢驗目錄
+        mkdir -p ipk_inspect
+        
+        # 進入目錄
+        cd ipk_inspect
+        
+        # 複製 IPK 文件
+        cp ../artifacts/trafficmon_0.3.0-1_aarch64_cortex-a53.ipk .
+        
+        echo "=== 1. 使用 ar 解包 ==="
+        ar x trafficmon_0.3.0-1_aarch64_cortex-a53.ipk
+        
+        echo "=== 2. 檢查解包後的文件 ==="
+        ls -la
+        
+        echo "=== 3. 檢查 debian-binary ==="
+        if [ -f "debian-binary" ]; then
+          cat debian-binary
+        else
+          echo "錯誤: 缺少 debian-binary 文件"
+        fi
+        
+        echo "=== 4. 檢查 control.tar.gz ==="
+        if [ -f "control.tar.gz" ]; then
+          echo "control.tar.gz 內容:"
+          tar -tzf control.tar.gz
+          echo ""
+          echo "control 文件內容:"
+          tar -xzf control.tar.gz -O ./control 2>/dev/null || tar -xzf control.tar.gz -O ./CONTROL/control 2>/dev/null || echo "無法讀取 control 文件"
+        else
+          echo "錯誤: 缺少 control.tar.gz 文件"
+        fi
+        
+        echo "=== 5. 檢查 data.tar.gz ==="
+        if [ -f "data.tar.gz" ]; then
+          echo "data.tar.gz 內容:"
+          tar -tzf data.tar.gz
+          echo ""
+          echo "二進制文件信息:"
+          tar -xzf data.tar.gz -O ./usr/bin/trafficmon 2>/dev/null | file - || echo "無法讀取二進制文件"
+        else
+          echo "錯誤: 缺少 data.tar.gz 文件"
+        fi
+        
+        echo "=== 6. 完整的文件樹 ==="
+        if [ -f "data.tar.gz" ]; then
+          echo "完整的文件結構:"
+          tar -tzf data.tar.gz | sort
+        fi
+        
+        # 清理
+        cd ..
+        rm -rf ipk_inspect
