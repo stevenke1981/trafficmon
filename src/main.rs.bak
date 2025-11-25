@@ -1,0 +1,82 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::Duration;
+
+// 定义 TrafficStats 结构体
+#[derive(Debug, Clone)]
+struct TrafficStats {
+    bytes_received: u64,
+    bytes_sent: u64,
+    packets_received: u64,
+    packets_sent: u64,
+}
+
+// 定义 NftablesClassifier 结构体
+struct NftablesClassifier {
+    // 添加必要的字段
+}
+
+// 全局运行状态
+static RUNNING: AtomicBool = AtomicBool::new(true);
+
+// 你的现有函数
+fn report_stats(stats: Arc<TrafficStats>, nft_classifier: NftablesClassifier, interval: u64) {
+    while RUNNING.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_secs(interval));
+        // 统计报告逻辑
+    }
+}
+
+// 添加 main 函数
+fn main() {
+    println!("Traffic monitor starting...");
+    
+    let stats = Arc::new(TrafficStats {
+        bytes_received: 0,
+        bytes_sent: 0,
+        packets_received: 0,
+        packets_sent: 0,
+    });
+    
+    let classifier = NftablesClassifier {};
+    let interval = 5;
+    
+    report_stats(stats, classifier, interval);
+}
+
+fn report_stats(stats: Arc<TrafficStats>, nft_classifier: NftablesClassifier, interval: u64) {
+    while RUNNING.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_secs(interval));
+        
+        // 從 nftables 獲取統計
+        match nft_classifier.get_traffic_stats() {
+            Ok(nft_stats) => {
+                println!("=== NFTables Traffic Statistics ===");
+                for (service, packets) in nft_stats {
+                    println!("{}: {} packets", service, packets);
+                }
+            }
+            Err(e) => eprintln!("Failed to get nftables stats: {}", e),
+        }
+        
+        // 從內部統計獲取詳細數據
+        let internal_stats = stats.get_detailed_stats();
+        if !internal_stats.is_empty() {
+            println!("=== Internal Traffic Statistics ===");
+            for (service, traffic_data) in internal_stats {
+                let duration = traffic_data.last_seen.duration_since(traffic_data.first_seen)
+                    .unwrap_or(Duration::from_secs(1));
+                let bytes_per_sec = traffic_data.bytes as f64 / duration.as_secs_f64();
+                
+                println!("{}:", service);
+                println!("  Bytes: {:.2} MB", traffic_data.bytes as f64 / 1024.0 / 1024.0);
+                println!("  Packets: {}", traffic_data.packets);
+                println!("  Rate: {:.2} KB/s", bytes_per_sec / 1024.0);
+                println!("  Duration: {:.2} seconds", duration.as_secs_f64());
+            }
+        }
+        
+        println!("=====================================");
+    }
+}
