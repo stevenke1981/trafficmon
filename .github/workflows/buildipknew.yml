@@ -57,38 +57,30 @@ jobs:
         tar -I zstd -xf sdk/sdk.tar.zst -C sdk --strip-components=1
         echo "SDK extraction complete"
 
-    - name: Install Rust toolchain
+    - name: Set ENV Paths
+      run: |
+        echo "STAGING_DIR=$GITHUB_WORKSPACE/sdk/staging_dir" >> $GITHUB_ENV
+        echo "PATH=$GITHUB_WORKSPACE/sdk/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/bin:$PATH" >> $GITHUB_ENV
+
+    - name: Verify Toolchain
+      run: |
+        which aarch64-openwrt-linux-musl-gcc
+        aarch64-openwrt-linux-musl-gcc --version
+
+    - name: Install Rust stable & target
       uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: aarch64-unknown-linux-musl
 
-    - name: Add MUSL target
-      run: rustup target add $TARGET
-
-    - name: Prepare Cargo cross-compile config
+    - name: Build with Built-in Target
       run: |
-        TOOLCHAIN_BIN="${GITHUB_WORKSPACE}/sdk/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/bin"
-        mkdir -p .cargo
-        printf "[target.%s]\nlinker = \"%s/aarch64-openwrt-linux-musl-gcc\"\nar = \"%s/aarch64-openwrt-linux-musl-ar\"\n" "$TARGET" "$TOOLCHAIN_BIN" "$TOOLCHAIN_BIN" > .cargo/config.toml
-        cat .cargo/config.toml
+        export RUSTFLAGS="-C linker=aarch64-openwrt-linux-musl-gcc -C link-arg=-static"
+        cargo build --release --target aarch64-unknown-linux-musl
 
-    - name: Check project structure
+    - name: Verify Binary
       run: |
-        echo "Current directory structure:"
-        find . -name "*.rs" -o -name "Cargo.toml" | sort
-        echo "src directory contents:"
-        ls -la src/ 2>/dev/null || echo "src directory does not exist"
-
-    - name: Build with dynamic linking
-      run: |
-        echo "Building with dynamic linking..."
-        cargo clean
-        RUSTFLAGS="-C target-feature=-crt-static" cargo build --release --target $TARGET
-
-    - name: Verify binary file
-      run: |
-        echo "Verifying binary file..."
-        file target/$TARGET/release/trafficmon
-        ls -la target/$TARGET/release/trafficmon
-        readelf -h target/$TARGET/release/trafficmon || echo "Not a valid ELF file"
+        file target/aarch64-unknown-linux-musl/release/*
+        ls -la target/aarch64-unknown-linux-musl/release/
 
     - name: Verify control file format
       run: |
@@ -135,92 +127,42 @@ jobs:
           sed -i 's/\r$//' openwrt/CONTROL/control
         fi
 
-- name: Create IPK using OpenWrt tools
-  run: |
-    echo "Using OpenWrt SDK to build IPK..."
-    
-    cd sdk
-    
-    # Update feeds
-    ./scripts/feeds update -a
-    ./scripts/feeds install -a
-    
-    # Prepare package
-    mkdir -p package/trafficmon
-    cp -r ../openwrt/* package/trafficmon/
-    
-    # Copy binary
-    mkdir -p package/trafficmon/files/usr/bin
-    cp ../target/$TARGET/release/trafficmon package/trafficmon/files/usr/bin/
-    
-    # Build using SDK
-    make package/trafficmon/compile V=s
-    
-    # Find and copy IPK
-    find bin/ -name "trafficmon*.ipk" -exec cp {} ../artifacts/ \;
-
-    - name: Compare with reference IPK
+    - name: Create IPK package manually
       run: |
-        echo "=== Downloading reference IPK for comparison ==="
-        mkdir -p reference
-        cd reference
+        echo "Creating IPK package manually..."
         
-        # Download a known-good IPK from OpenWrt repository
-        wget -q "https://downloads.openwrt.org/releases/24.10.3/packages/aarch64_cortex-a53/base/busybox_1.36.1-3_aarch64_cortex-a53.ipk" || echo "Failed to download reference"
+        # Create artifacts directory
+        mkdir -p artifacts
         
-        if [ -f "busybox_1.36.1-3_aarch64_cortex-a53.ipk" ]; then
-          echo "Reference IPK downloaded successfully"
-          
-          echo "=== Reference IPK structure ==="
-          ar -t busybox_1.36.1-3_aarch64_cortex-a53.ipk
-          
-          echo ""
-          echo "=== Our IPK structure ==="
-          ar -t "${GITHUB_WORKSPACE}/artifacts/trafficmon_0.3.0-1_${OPENWRT_ARCH}.ipk"
-          
-          echo ""
-          echo "=== Extracting reference IPK ==="
-          mkdir ref_extract
-          cd ref_extract
-          ar -x ../busybox_1.36.1-3_aarch64_cortex-a53.ipk
-          
-          echo "Reference debian-binary:"
-          cat debian-binary | od -c
-          
-          echo ""
-          echo "Reference control.tar.gz test:"
-          tar -tzf control.tar.gz | head -5
-          
-          echo ""
-          echo "=== Extracting our IPK ==="
-          cd ..
-          mkdir our_extract
-          cd our_extract
-          ar -x "${GITHUB_WORKSPACE}/artifacts/trafficmon_0.3.0-1_${OPENWRT_ARCH}.ipk"
-          
-          echo "Our debian-binary:"
-          cat debian-binary | od -c
-          
-          echo ""
-          echo "Our control.tar.gz test:"
-          tar -tzf control.tar.gz | head -5
-          
-          echo ""
-          echo "=== File format comparison ==="
-          echo "Reference control.tar.gz:"
-          file ../ref_extract/control.tar.gz
-          echo "Our control.tar.gz:"
-          file control.tar.gz
-          
-          echo ""
-          echo "Reference data.tar.gz:"
-          file ../ref_extract/data.tar.gz
-          echo "Our data.tar.gz:"
-          file data.tar.gz
-        fi
+        # Create temporary directory for IPK construction
+        mkdir -p ipk_build/control
+        mkdir -p ipk_build/data/usr/bin
         
-        cd "${GITHUB_WORKSPACE}"
-        rm -rf reference
+        # Copy binary
+        cp target/aarch64-unknown-linux-musl/release/trafficmon ipk_build/data/usr/bin/
+        chmod +x ipk_build/data/usr/bin/trafficmon
+        
+        # Copy and prepare control file
+        cp openwrt/CONTROL/control ipk_build/control/
+        
+        # Create debian-binary
+        echo "2.0" > ipk_build/debian-binary
+        
+        # Create control.tar.gz
+        cd ipk_build/control
+        tar -czf ../control.tar.gz .
+        cd ..
+        
+        # Create data.tar.gz
+        cd data
+        tar -czf ../data.tar.gz .
+        cd ..
+        
+        # Create the IPK
+        ar r ../artifacts/trafficmon_0.3.0-1_${OPENWRT_ARCH}.ipk debian-binary control.tar.gz data.tar.gz
+        
+        cd ..
+        echo "IPK created: artifacts/trafficmon_0.3.0-1_${OPENWRT_ARCH}.ipk"
 
     - name: Verify IPK package structure
       run: |
@@ -239,6 +181,7 @@ jobs:
         
         echo "=== 3. Check debian-binary ==="
         if [ -f "debian-binary" ]; then
+          echo "debian-binary contents:"
           cat debian-binary
         else
           echo "ERROR: debian-binary missing"
