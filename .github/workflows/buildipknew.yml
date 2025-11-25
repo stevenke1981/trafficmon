@@ -100,11 +100,10 @@ jobs:
            Real-time bandwidth statistics using libpcap.
           EOF
 
-      - name: Build official .ipk using OpenWrt ipkg-build
+      - name: Build .ipk with official ipkg-build
         run: |
           mkdir -p artifacts
-          ${{ github.workspace }}/sdk/scripts/ipkg-build -c -o 0 -g 0 \
-            ipk-package/${{ env.PACKAGE_NAME }} artifacts/
+          sdk/scripts/ipkg-build ipk artifacts/
 
       - name: List generated artifacts
         run: |
