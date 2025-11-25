@@ -191,7 +191,7 @@ jobs:
           echo "✓ Init script copied from files/trafficmon.init"
         else
           echo "⚠ Init script not found at files/trafficmon.init"
-          # 使用 echo 命令創建 init 腳本，避免 EOF 問題
+          # 使用 echo 命令創建 init 腳本
           echo '#!/bin/sh /etc/rc.common' > $PKG_DIR/etc/init.d/trafficmon
           echo 'START=99' >> $PKG_DIR/etc/init.d/trafficmon
           echo 'USE_PROCD=1' >> $PKG_DIR/etc/init.d/trafficmon
@@ -215,7 +215,7 @@ jobs:
           echo "✓ Config file copied from config/trafficmon.conf"
         else
           echo "⚠ Config file not found at config/trafficmon.conf"
-          # 使用 echo 命令創建配置文件，避免 EOF 問題
+          # 使用 echo 命令創建配置文件
           echo '# TrafficMon Configuration' > $PKG_DIR/etc/config/trafficmon
           echo 'config global' >> $PKG_DIR/etc/config/trafficmon
           echo '    option enabled "1"' >> $PKG_DIR/etc/config/trafficmon
@@ -233,24 +233,24 @@ jobs:
           echo "✓ Basic config file created"
         fi
         
-        # 創建 control 文件
+        # 創建 control 文件 - 使用 printf 避免 EOF 問題
         VERSION="${{ steps.metadata.outputs.version }}"
         GIT_HASH="${{ steps.metadata.outputs.git_hash }}"
+        REPOSITORY="${{ github.repository }}"
+        MAINTAINER="${{ github.repository_owner }}"
         
-        cat > $PKG_DIR/CONTROL/control << CONTROL_EOF
-Package: $PACKAGE_NAME
-Version: ${VERSION}-${GIT_HASH}
-Depends: libc, libpcap, nftables
-Source: ${{ github.repository }}
-Section: net
-Category: Network
-Priority: optional
-Architecture: $OPENWRT_ARCH
-Maintainer: ${{ github.repository_owner }}
-Description: Traffic monitoring and filtering tool for OpenWrt
- Uses nftables for traffic classification and filtering.
- Built from ${{ github.repository }} @ ${GIT_HASH}
-CONTROL_EOF
+        printf "Package: %s\n" $PACKAGE_NAME > $PKG_DIR/CONTROL/control
+        printf "Version: %s-%s\n" $VERSION $GIT_HASH >> $PKG_DIR/CONTROL/control
+        printf "Depends: libc, libpcap, nftables\n" >> $PKG_DIR/CONTROL/control
+        printf "Source: %s\n" "$REPOSITORY" >> $PKG_DIR/CONTROL/control
+        printf "Section: net\n" >> $PKG_DIR/CONTROL/control
+        printf "Category: Network\n" >> $PKG_DIR/CONTROL/control
+        printf "Priority: optional\n" >> $PKG_DIR/CONTROL/control
+        printf "Architecture: %s\n" $OPENWRT_ARCH >> $PKG_DIR/CONTROL/control
+        printf "Maintainer: %s\n" "$MAINTAINER" >> $PKG_DIR/CONTROL/control
+        printf "Description: Traffic monitoring and filtering tool for OpenWrt\n" >> $PKG_DIR/CONTROL/control
+        printf " Uses nftables for traffic classification and filtering.\n" >> $PKG_DIR/CONTROL/control
+        printf " Built from %s @ %s\n" "$REPOSITORY" $GIT_HASH >> $PKG_DIR/CONTROL/control
         
         # 顯示套件結構
         echo "=== Package Structure ==="
