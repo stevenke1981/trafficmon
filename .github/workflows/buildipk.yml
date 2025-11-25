@@ -84,30 +84,6 @@ jobs:
         # 使用動態鏈接
         RUSTFLAGS="-C target-feature=-crt-static" cargo build --release --target $TARGET
 
- - name: Build Rust binary
-  run: |
-    set -e  # 任何命令失敗就停止
-    
-    echo "=== 環境信息 ==="
-    rustc --version
-    cargo --version
-    echo "Target: $TARGET"
-    
-    echo "=== 開始構建 ==="
-    cargo build --release --target $TARGET --verbose
-    
-    echo "=== 複製產物 ==="
-    mkdir -p openwrt_bin
-    cp target/$TARGET/release/trafficmon openwrt_bin/
-    
-    echo "=== 驗證結果 ==="
-    ls -lh openwrt_bin/
-    file openwrt_bin/trafficmon
-    
-    if command -v ldd &> /dev/null; then
-      ldd openwrt_bin/trafficmon || echo "靜態鏈接或無法檢查"
-    fi
-
     - name: Verify binary file
       run: |
         echo "驗證二進制文件..."
