@@ -41,12 +41,11 @@ jobs:
     - name: Create Cargo cross toolchain config
       run: |
         mkdir -p .cargo
-        printf "%s\n" \
-"[target.aarch64-unknown-linux-musl]" \
-"linker = \"${{ env.TOOLCHAIN_BIN }}/${{ env.TOOLCHAIN_TRIPLE }}-gcc\"" \
-"ar = \"${{ env.TOOLCHAIN_BIN }}/${{ env.TOOLCHAIN_TRIPLE }}-ar\"" \
-        > .cargo/config.toml
-
+        cat > .cargo/config.toml << EOF
+[target.aarch64-unknown-linux-musl]
+linker = "${{ env.TOOLCHAIN_BIN }}/${{ env.TOOLCHAIN_TRIPLE }}-gcc"
+ar = "${{ env.TOOLCHAIN_BIN }}/${{ env.TOOLCHAIN_TRIPLE }}-ar"
+EOF
 
     - name: Build Rust binary
       run: |
@@ -61,28 +60,28 @@ jobs:
     - name: Create OpenWrt Makefile
       run: |
         mkdir -p sdk/package/trafficmon
-        printf "%s\n" \
-"include \$(TOPDIR)/rules.mk" \
-"" \
-"PKG_NAME:=trafficmon" \
-"PKG_RELEASE:=1" \
-"" \
-"include \$(INCLUDE_DIR)/package.mk" \
-"" \
-"define Package/trafficmon" \
-"  SECTION:=utils" \
-"  CATEGORY:=Utilities" \
-"  TITLE:=Traffic Monitor (Rust)" \
-"  DEPENDS:=+libpcap" \
-"endef" \
-"" \
-"define Package/trafficmon/install" \
-"  \$(INSTALL_DIR) \$(1)/usr/bin" \
-"  \$(INSTALL_BIN) ./files/usr/bin/trafficmon \$(1)/usr/bin/" \
-"endef" \
-"" \
-"\$(eval \$(call BuildPackage,trafficmon))" \
-        > sdk/package/trafficmon/Makefile
+        cat > sdk/package/trafficmon/Makefile << EOF
+include \$(TOPDIR)/rules.mk
+
+PKG_NAME:=trafficmon
+PKG_RELEASE:=1
+
+include \$(INCLUDE_DIR)/package.mk
+
+define Package/trafficmon
+  SECTION:=utils
+  CATEGORY:=Utilities
+  TITLE:=Traffic Monitor (Rust)
+  DEPENDS:=+libpcap
+endef
+
+define Package/trafficmon/install
+  \$(INSTALL_DIR) \$(1)/usr/bin
+  \$(INSTALL_BIN) ./files/usr/bin/trafficmon \$(1)/usr/bin/
+endef
+
+\$(eval \$(call BuildPackage,trafficmon))
+EOF
 
     - name: Compile OpenWrt package
       run: |
