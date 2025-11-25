@@ -159,35 +159,7 @@ jobs:
         chmod 755 "$WORKDIR/data/etc/init.d/trafficmon"
         chmod 644 "$WORKDIR/data/etc/config/trafficmon"
         
-        # Create control directory
-        mkdir -p "$WORKDIR/control"
-        cp openwrt/CONTROL/control "$WORKDIR/control/"
-        
-        # Copy optional control scripts if they exist
-        [ -f openwrt/CONTROL/postinst ] && cp openwrt/CONTROL/postinst "$WORKDIR/control/" && chmod 755 "$WORKDIR/control/postinst"
-        [ -f openwrt/CONTROL/prerm ] && cp openwrt/CONTROL/prerm "$WORKDIR/control/" && chmod 755 "$WORKDIR/control/prerm"
-        [ -f openwrt/CONTROL/postrm ] && cp openwrt/CONTROL/postrm "$WORKDIR/control/" && chmod 755 "$WORKDIR/control/postrm"
-        
-        # Create data.tar.gz with explicit gzip options
-        echo "Creating data.tar.gz..."
-        cd "$WORKDIR/data"
-        find . -type f -o -type d | sort | tar --no-recursion --numeric-owner --owner=0 --group=0 -czf ../data.tar.gz -T -
-        cd "$WORKDIR"
-        
-        # Verify data.tar.gz
-        echo "Verifying data.tar.gz can be extracted:"
-        tar -tzf data.tar.gz > /dev/null && echo "✓ data.tar.gz is valid" || (echo "✗ data.tar.gz is invalid" && exit 1)
-        
-        # Create control.tar.gz with explicit gzip options
-        echo "Creating control.tar.gz..."
-        cd "$WORKDIR/control"
-        find . -type f | sort | tar --no-recursion --numeric-owner --owner=0 --group=0 -czf ../control.tar.gz -T -
-        cd "$WORKDIR"
-        
-        # Verify control.tar.gz
-        echo "Verifying control.tar.gz can be extracted:"
-        tar -tzf control.tar.gz > /dev/null && echo "✓ control.tar.gz is valid" || (echo "✗ control.tar.gz is invalid" && exit 1)
-        
+ 
         # Create debian-binary with explicit newline
         printf "2.0\n" > "$WORKDIR/debian-binary"
         
@@ -239,68 +211,29 @@ jobs:
         cd "${GITHUB_WORKSPACE}"
         rm -rf "$WORKDIR" test_extract
 
-    - name: Compare with reference IPK
-      run: |
-        echo "=== Downloading reference IPK for comparison ==="
-        mkdir -p reference
-        cd reference
-        
-        # Download a known-good IPK from OpenWrt repository
-        wget -q "https://downloads.openwrt.org/releases/24.10.3/packages/aarch64_cortex-a53/base/busybox_1.36.1-3_aarch64_cortex-a53.ipk" || echo "Failed to download reference"
-        
-        if [ -f "busybox_1.36.1-3_aarch64_cortex-a53.ipk" ]; then
-          echo "Reference IPK downloaded successfully"
-          
-          echo "=== Reference IPK structure ==="
-          ar -t busybox_1.36.1-3_aarch64_cortex-a53.ipk
-          
-          echo ""
-          echo "=== Our IPK structure ==="
-          ar -t "${GITHUB_WORKSPACE}/artifacts/trafficmon_0.3.0-1_${OPENWRT_ARCH}.ipk"
-          
-          echo ""
-          echo "=== Extracting reference IPK ==="
-          mkdir ref_extract
-          cd ref_extract
-          ar -x ../busybox_1.36.1-3_aarch64_cortex-a53.ipk
-          
-          echo "Reference debian-binary:"
-          cat debian-binary | od -c
-          
-          echo ""
-          echo "Reference control.tar.gz test:"
-          tar -tzf control.tar.gz | head -5
-          
-          echo ""
-          echo "=== Extracting our IPK ==="
-          cd ..
-          mkdir our_extract
-          cd our_extract
-          ar -x "${GITHUB_WORKSPACE}/artifacts/trafficmon_0.3.0-1_${OPENWRT_ARCH}.ipk"
-          
-          echo "Our debian-binary:"
-          cat debian-binary | od -c
-          
-          echo ""
-          echo "Our control.tar.gz test:"
-          tar -tzf control.tar.gz | head -5
-          
-          echo ""
-          echo "=== File format comparison ==="
-          echo "Reference control.tar.gz:"
-          file ../ref_extract/control.tar.gz
-          echo "Our control.tar.gz:"
-          file control.tar.gz
-          
-          echo ""
-          echo "Reference data.tar.gz:"
-          file ../ref_extract/data.tar.gz
-          echo "Our data.tar.gz:"
-          file data.tar.gz
-        fi
-        
-        cd "${GITHUB_WORKSPACE}"
-        rm -rf reference
+- name: Create IPK using OpenWrt tools
+  run: |
+    echo "Using OpenWrt SDK to build IPK..."
+    
+    cd sdk
+    
+    # Update feeds
+    ./scripts/feeds update -a
+    ./scripts/feeds install -a
+    
+    # Prepare package
+    mkdir -p package/trafficmon
+    cp -r ../openwrt/* package/trafficmon/
+    
+    # Copy binary
+    mkdir -p package/trafficmon/files/usr/bin
+    cp ../target/$TARGET/release/trafficmon package/trafficmon/files/usr/bin/
+    
+    # Build using SDK
+    make package/trafficmon/compile V=s
+    
+    # Find and copy IPK
+    find bin/ -name "trafficmon*.ipk" -exec cp {} ../artifacts/ \;
 
     - name: Verify IPK package structure
       run: |
