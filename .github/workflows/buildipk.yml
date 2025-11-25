@@ -94,6 +94,15 @@ jobs:
         mkdir -p openwrt_bin
         cp target/$TARGET/release/trafficmon openwrt_bin/
 
+    - name: Verify binary file
+      run: |
+        echo "驗證二進制文件..."
+        file target/$TARGET/release/trafficmon
+        ls -la target/$TARGET/release/trafficmon
+        
+        # 檢查是否為有效的 ELF 文件
+        readelf -h target/$TARGET/release/trafficmon || echo "不是有效的 ELF 文件"
+
     - name: Prepare OpenWrt package
       run: |
         echo "設置 OpenWrt 包..."
