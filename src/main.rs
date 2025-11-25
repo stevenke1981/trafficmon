@@ -3,16 +3,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 use std::collections::HashMap;
-use std::process;
 
 // 導入可能存在的 nftables 模塊
 #[cfg(feature = "nftables")]
 mod nftables;
 
-// 如果沒有單獨的 nftables.rs，我們在這裡定義
+// 如果沒有單獨的 nftables.rs,我們在這裡定義
 #[cfg(not(feature = "nftables"))]
 mod nftables {
-    use super::*;
     use std::collections::HashMap;
     use serde::{Deserialize, Serialize};
 
@@ -224,7 +222,7 @@ impl TrafficStats {
     }
     
     fn update(&mut self, classified: &ClassifiedTraffic) {
-        // 簡單假設：根據端口判斷是接收還是發送
+        // 簡單假設:根據端口判斷是接收還是發送
         if classified.destination_port == Some(80) || classified.destination_port == Some(443) {
             self.bytes_received += classified.bytes;
             self.packets_received += classified.packets;
@@ -239,8 +237,8 @@ impl TrafficStats {
     
     fn display_summary(&self) {
         println!("=== 流量統計 ===");
-        println!("接收: {} 字節, {} 封包", self.bytes_received, self.packets_received);
-        println!("發送: {} 字節, {} 封包", self.bytes_sent, self.packets_sent);
+        println!("接收: {} 字節, {} 包包", self.bytes_received, self.packets_received);
+        println!("發送: {} 字節, {} 包包", self.bytes_sent, self.packets_sent);
         println!("總計: {} 字節", self.bytes_received + self.bytes_sent);
         
         println!("\n=== 流量分類 ===");
@@ -251,21 +249,22 @@ impl TrafficStats {
     }
 }
 
-// 全局運行狀態
-static RUNNING: AtomicBool = AtomicBool::new(true);
-
 // 信號處理
-fn setup_signal_handler() {
-    let running = Arc::clone(&RUNNING);
+fn setup_signal_handler(running: Arc<AtomicBool>) {
     ctrlc::set_handler(move || {
-        println!("\n收到停止信號，正在關閉...");
+        println!("\n收到停止信號,正在關閉...");
         running.store(false, Ordering::SeqCst);
     }).expect("設置信號處理器失敗");
 }
 
 // 統計報告函數
-fn report_stats(stats: Arc<std::sync::Mutex<TrafficStats>>, nft_classifier: Arc<std::sync::Mutex<NftablesClassifier>>, interval: u64) {
-    while RUNNING.load(Ordering::SeqCst) {
+fn report_stats(
+    stats: Arc<std::sync::Mutex<TrafficStats>>, 
+    nft_classifier: Arc<std::sync::Mutex<NftablesClassifier>>, 
+    interval: u64,
+    running: Arc<AtomicBool>
+) {
+    while running.load(Ordering::SeqCst) {
         // 顯示統計信息
         {
             let stats_guard = stats.lock().unwrap();
@@ -290,10 +289,14 @@ fn report_stats(stats: Arc<std::sync::Mutex<TrafficStats>>, nft_classifier: Arc<
 }
 
 // 模擬流量捕獲的函數
-fn capture_traffic(stats: Arc<std::sync::Mutex<TrafficStats>>, classifier: Arc<std::sync::Mutex<NftablesClassifier>>) {
+fn capture_traffic(
+    stats: Arc<std::sync::Mutex<TrafficStats>>, 
+    classifier: Arc<std::sync::Mutex<NftablesClassifier>>,
+    running: Arc<AtomicBool>
+) {
     let mut packet_count = 0;
     
-    while RUNNING.load(Ordering::SeqCst) {
+    while running.load(Ordering::SeqCst) {
         packet_count += 1;
         
         // 模擬一些網絡流量
@@ -316,7 +319,7 @@ fn capture_traffic(stats: Arc<std::sync::Mutex<TrafficStats>>, classifier: Arc<s
             }
             
             if packet_count % 10 == 0 {
-                println!("處理封包 #{}: {}:{} -> {}:{} [{}] - {} 字節", 
+                println!("處理包包 #{}: {}:{} -> {}:{} [{}] - {} 字節", 
                     packet_count, src_ip, src_port.unwrap_or(0), 
                     dst_ip, dst_port.unwrap_or(0), protocol, bytes);
             }
@@ -333,23 +336,29 @@ fn main() {
     let stats = Arc::new(std::sync::Mutex::new(TrafficStats::new()));
     let classifier = Arc::new(std::sync::Mutex::new(NftablesClassifier::new()));
     
+    // 創建全局運行狀態
+    let running = Arc::new(AtomicBool::new(true));
+    
     // 設置信號處理
-    setup_signal_handler();
+    setup_signal_handler(Arc::clone(&running));
     
     // 克隆 Arc 用於不同線程
     let stats_capture = Arc::clone(&stats);
     let classifier_capture = Arc::clone(&classifier);
+    let running_capture = Arc::clone(&running);
+    
     let stats_report = Arc::clone(&stats);
     let classifier_report = Arc::clone(&classifier);
+    let running_report = Arc::clone(&running);
     
     // 啟動流量捕獲線程
     let capture_handle = thread::spawn(move || {
-        capture_traffic(stats_capture, classifier_capture);
+        capture_traffic(stats_capture, classifier_capture, running_capture);
     });
     
     // 啟動統計報告線程
     let report_handle = thread::spawn(move || {
-        report_stats(stats_report, classifier_report, 5);
+        report_stats(stats_report, classifier_report, 5, running_report);
     });
     
     println!("📊 流量監控運行中... 按 Ctrl+C 停止");
