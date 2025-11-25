@@ -205,20 +205,18 @@ jobs:
           chmod +x $PKG_DIR/etc/init.d/trafficmon
           echo "✅ Init script copied from files/trafficmon.init"
         else
-          cat > $PKG_DIR/etc/init.d/trafficmon << 'EOF'
-#!/bin/sh /etc/rc.common
-START=99
-USE_PROCD=1
-
-start_service() {
-    procd_open_instance
-    procd_set_param command /usr/bin/trafficmon
-    procd_set_param stdout 1
-    procd_set_param stderr 1
-    procd_set_param respawn
-    procd_close_instance
-}
-EOF
+          echo '#!/bin/sh /etc/rc.common' > $PKG_DIR/etc/init.d/trafficmon
+          echo 'START=99' >> $PKG_DIR/etc/init.d/trafficmon
+          echo 'USE_PROCD=1' >> $PKG_DIR/etc/init.d/trafficmon
+          echo '' >> $PKG_DIR/etc/init.d/trafficmon
+          echo 'start_service() {' >> $PKG_DIR/etc/init.d/trafficmon
+          echo '    procd_open_instance' >> $PKG_DIR/etc/init.d/trafficmon
+          echo '    procd_set_param command /usr/bin/trafficmon' >> $PKG_DIR/etc/init.d/trafficmon
+          echo '    procd_set_param stdout 1' >> $PKG_DIR/etc/init.d/trafficmon
+          echo '    procd_set_param stderr 1' >> $PKG_DIR/etc/init.d/trafficmon
+          echo '    procd_set_param respawn' >> $PKG_DIR/etc/init.d/trafficmon
+          echo '    procd_close_instance' >> $PKG_DIR/etc/init.d/trafficmon
+          echo '}' >> $PKG_DIR/etc/init.d/trafficmon
           chmod +x $PKG_DIR/etc/init.d/trafficmon
           echo "✅ Basic init script created"
         fi
@@ -228,22 +226,20 @@ EOF
           cp config/trafficmon.conf $PKG_DIR/etc/config/trafficmon
           echo "✅ Config file copied from config/trafficmon.conf"
         else
-          cat > $PKG_DIR/etc/config/trafficmon << 'EOF'
-# TrafficMon Configuration
-config global
-    option enabled "1"
-    option report_interval "60"
-    option log_level "info"
-
-# Service definitions
-config service "netflix"
-    option enabled "0"
-    option ports "80,443,1935"
-
-config service "youtube"
-    option enabled "0"
-    option ports "80,443,1935"
-EOF
+          echo '# TrafficMon Configuration' > $PKG_DIR/etc/config/trafficmon
+          echo 'config global' >> $PKG_DIR/etc/config/trafficmon
+          echo '    option enabled "1"' >> $PKG_DIR/etc/config/trafficmon
+          echo '    option report_interval "60"' >> $PKG_DIR/etc/config/trafficmon
+          echo '    option log_level "info"' >> $PKG_DIR/etc/config/trafficmon
+          echo '' >> $PKG_DIR/etc/config/trafficmon
+          echo '# Service definitions' >> $PKG_DIR/etc/config/trafficmon
+          echo 'config service "netflix"' >> $PKG_DIR/etc/config/trafficmon
+          echo '    option enabled "0"' >> $PKG_DIR/etc/config/trafficmon
+          echo '    option ports "80,443,1935"' >> $PKG_DIR/etc/config/trafficmon
+          echo '' >> $PKG_DIR/etc/config/trafficmon
+          echo 'config service "youtube"' >> $PKG_DIR/etc/config/trafficmon
+          echo '    option enabled "0"' >> $PKG_DIR/etc/config/trafficmon
+          echo '    option ports "80,443,1935"' >> $PKG_DIR/etc/config/trafficmon
           echo "✅ Basic config file created"
         fi
         
@@ -252,20 +248,18 @@ EOF
         REPOSITORY="${{ github.repository }}"
         MAINTAINER="${{ github.repository_owner }}"
         
-        cat > $PKG_DIR/CONTROL/control << EOF
-Package: $PACKAGE_NAME
-Version: $VERSION-$GIT_HASH
-Depends: libc, libpcap, nftables
-Source: $REPOSITORY
-Section: net
-Category: Network
-Priority: optional
-Architecture: $OPENWRT_ARCH
-Maintainer: $MAINTAINER
-Description: Traffic monitoring and filtering tool for OpenWrt
- Uses nftables for traffic classification and filtering.
- Built from $REPOSITORY @ $GIT_HASH
-EOF
+        echo "Package: $PACKAGE_NAME" > $PKG_DIR/CONTROL/control
+        echo "Version: $VERSION-$GIT_HASH" >> $PKG_DIR/CONTROL/control
+        echo "Depends: libc, libpcap, nftables" >> $PKG_DIR/CONTROL/control
+        echo "Source: $REPOSITORY" >> $PKG_DIR/CONTROL/control
+        echo "Section: net" >> $PKG_DIR/CONTROL/control
+        echo "Category: Network" >> $PKG_DIR/CONTROL/control
+        echo "Priority: optional" >> $PKG_DIR/CONTROL/control
+        echo "Architecture: $OPENWRT_ARCH" >> $PKG_DIR/CONTROL/control
+        echo "Maintainer: $MAINTAINER" >> $PKG_DIR/CONTROL/control
+        echo "Description: Traffic monitoring and filtering tool for OpenWrt" >> $PKG_DIR/CONTROL/control
+        echo " Uses nftables for traffic classification and filtering." >> $PKG_DIR/CONTROL/control
+        echo " Built from $REPOSITORY @ $GIT_HASH" >> $PKG_DIR/CONTROL/control
         
         echo "=== Package Structure ==="
         find $PKG_DIR -type f | sort
