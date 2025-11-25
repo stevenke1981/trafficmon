@@ -46,7 +46,9 @@ jobs:
       id: sdk-cache
       with:
         path: openwrt-sdk
-        key: ${{ runner.os }}-openwrt-sdk-24.10.0-${{ hashFiles('src/Cargo.toml') }}
+        key: ${{ runner.os }}-openwrt-sdk-24.10.0-${{ hashFiles('**/src/Cargo.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-openwrt-sdk-24.10.0-
 
     - name: Download and Extract OpenWrt SDK
       if: steps.sdk-cache.outputs.cache-hit != 'true'
@@ -71,6 +73,7 @@ jobs:
           exit 1
         fi
         
+        echo "SDK contents:"
         ls -la openwrt-sdk/
 
     - name: Set Environment Variables
@@ -80,15 +83,16 @@ jobs:
         echo "PATH=$GITHUB_WORKSPACE/openwrt-sdk/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/bin:$PATH" >> $GITHUB_ENV
         echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-openwrt-linux-musl-gcc" >> $GITHUB_ENV
         echo "CC_aarch64-unknown-linux-musl=aarch64-openwrt-linux-musl-gcc" >> $GITHUB_ENV
-        echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/src/target" >> $GITHUB_ENV
 
     - name: Verify Toolchain
       run: |
         echo "=== Toolchain Verification ==="
-        which aarch64-openwrt-linux-musl-gcc
-        aarch64-openwrt-linux-musl-gcc --version
+        which aarch64-openwrt-linux-musl-gcc || echo "Toolchain not found in PATH"
+        aarch64-openwrt-linux-musl-gcc --version || echo "Failed to get toolchain version"
         echo "STAGING_DIR: $STAGING_DIR"
-        echo "PATH: $PATH"
+        echo "Current directory: $(pwd)"
+        echo "Workspace contents:"
+        ls -la
 
     - name: Install Rust Toolchain
       uses: dtolnay/rust-toolchain@stable
@@ -101,13 +105,12 @@ jobs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          src/target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('src/Cargo.toml', 'src/Cargo.lock') }}
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/src/Cargo.toml', '**/src/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-
 
     - name: Build Rust Binary
-      working-directory: ./src
       run: |
         # 設置 Rust 編譯標誌
         export RUSTFLAGS="-C linker=aarch64-openwrt-linux-musl-gcc -C target-feature=-crt-static"
@@ -118,34 +121,53 @@ jobs:
         echo "RUSTFLAGS: $RUSTFLAGS"
         echo "Working directory: $(pwd)"
         
+        # 顯示目錄結構
+        echo "Current directory contents:"
+        ls -la
+        echo "src directory contents:"
+        ls -la src/ || echo "No src directory"
+        
         # 顯示 Cargo 配置
         cargo --version
         rustc --version
         
-        # 清理並構建
-        cargo clean
-        cargo build --release --target aarch64-unknown-linux-musl -v
+        # 檢查工具鏈
+        which aarch64-openwrt-linux-musl-gcc
+        aarch64-openwrt-linux-musl-gcc --version
+        
+        # 驗證 Cargo.toml
+        echo "Validating Cargo.toml..."
+        cat src/Cargo.toml
+        cargo check --manifest-path=src/Cargo.toml --target aarch64-unknown-linux-musl --message-format=short
+        
+        # 構建
+        echo "Starting build process..."
+        cargo build --manifest-path=src/Cargo.toml --release --target aarch64-unknown-linux-musl
         
         echo "=== Build Output ==="
-        ls -la target/aarch64-unknown-linux-musl/release/
+        find . -name "trafficmon" -type f 2>/dev/null || echo "No binary found"
+        ls -la target/aarch64-unknown-linux-musl/release/ 2>/dev/null || echo "No release directory"
 
     - name: Verify Binary Compatibility
       run: |
-        cd src
         echo "=== Binary Verification ==="
-        file target/aarch64-unknown-linux-musl/release/trafficmon
-        echo "Binary size:"
-        ls -lh target/aarch64-unknown-linux-musl/release/trafficmon
-        # 檢查依賴
-        echo "Dynamic dependencies:"
-        aarch64-openwrt-linux-musl-objdump -p target/aarch64-unknown-linux-musl/release/trafficmon | grep NEEDED || echo "No dynamic dependencies found"
+        if [ -f "target/aarch64-unknown-linux-musl/release/trafficmon" ]; then
+          file target/aarch64-unknown-linux-musl/release/trafficmon
+          echo "Binary size:"
+          ls -lh target/aarch64-unknown-linux-musl/release/trafficmon
+          # 檢查依賴
+          echo "Dynamic dependencies:"
+          aarch64-openwrt-linux-musl-objdump -p target/aarch64-unknown-linux-musl/release/trafficmon | grep NEEDED || echo "No dynamic dependencies found"
+        else
+          echo "❌ Binary not found!"
+          exit 1
+        fi
 
     - name: Get Package Metadata
       id: metadata
       run: |
-        cd src
         # 從 Cargo.toml 獲取版本號
-        VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+        VERSION=$(grep -m1 '^version' src/Cargo.toml | cut -d'"' -f2)
         if [ -z "$VERSION" ]; then
           VERSION="0.1.0"
           echo "Warning: Version not found in Cargo.toml, using default: $VERSION"
@@ -165,6 +187,7 @@ jobs:
         
         echo "Package version: $VERSION"
         echo "Git hash: $GIT_HASH"
+        echo "Binary exists: ${{ steps.metadata.outputs.binary_exists }}"
 
     - name: Prepare OpenWrt Package Structure
       if: steps.metadata.outputs.binary_exists == 'true'
@@ -179,7 +202,7 @@ jobs:
         
         # 複製二進制文件
         echo "=== Copying Binary ==="
-        cp src/target/aarch64-unknown-linux-musl/release/trafficmon $PKG_DIR/usr/bin/
+        cp target/aarch64-unknown-linux-musl/release/trafficmon $PKG_DIR/usr/bin/
         chmod +x $PKG_DIR/usr/bin/trafficmon
         echo "✓ Binary copied and made executable"
         
@@ -317,7 +340,7 @@ jobs:
         name: ${{ env.PACKAGE_NAME }}-${{ env.OPENWRT_ARCH }}-${{ github.sha }}
         path: |
           dist/*.ipk
-          src/target/aarch64-unknown-linux-musl/release/trafficmon
+          target/aarch64-unknown-linux-musl/release/trafficmon
         retention-days: 30
 
     - name: Build Failure Notification
