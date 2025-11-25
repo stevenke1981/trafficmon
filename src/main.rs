@@ -43,6 +43,7 @@ mod nftables {
     pub struct NftablesClassifier {
         rules: HashMap<String, TrafficCategory>,
         application_map: HashMap<(u16, String), String>,
+        #[allow(dead_code)]
         malicious_ips: Vec<String>,
         cache: HashMap<String, ClassifiedTraffic>,
     }
@@ -169,6 +170,7 @@ mod nftables {
             }
         }
         
+        #[allow(dead_code)]
         pub fn add_malicious_ip(&mut self, ip: &str) {
             if !self.malicious_ips.contains(&ip.to_string()) {
                 self.malicious_ips.push(ip.to_string());
@@ -185,6 +187,7 @@ mod nftables {
             summary
         }
         
+        #[allow(dead_code)]
         pub fn clear_cache(&mut self) {
             self.cache.clear();
         }
