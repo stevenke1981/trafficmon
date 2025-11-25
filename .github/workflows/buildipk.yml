@@ -76,16 +76,6 @@ jobs:
         echo "src 目錄內容:"
         ls -la src/ 2>/dev/null || echo "src 目錄不存在"
 
-    - name: Check binary dependencies
-      run: |
-        echo "檢查二進制文件依賴..."
-        file target/$TARGET/release/trafficmon
-        readelf -h target/$TARGET/release/trafficmon
-        echo "=== 動態段信息 ==="
-        readelf -d target/$TARGET/release/trafficmon || echo "沒有動態段（靜態鏈接）"
-        echo "=== 字符串信息 ==="
-        strings target/$TARGET/release/trafficmon | head -20
-
     - name: Build with dynamic linking
       run: |
         echo "嘗試動態鏈接..."
