@@ -1,4 +1,4 @@
-name: Build Rust with Cross (Custom Config)
+name: Build Rust with Cross and Create IPK
 
 on:
   push:
@@ -15,15 +15,6 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: Create Cross.toml config
-      run: |
-        cat > Cross.toml << EOF
-        [target.aarch64-unknown-linux-musl]
-        pre-build = [
-            "apt-get update && apt-get install -y libpcap-dev"
-        ]
-        EOF
-    
     - name: Install Rust toolchain
       run: |
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -38,9 +29,71 @@ jobs:
       run: |
         source $HOME/.cargo/env
         cross build --target aarch64-unknown-linux-musl --release
-
-    - name: Upload artifacts
+    
+    - name: Get binary name and version
+      id: binary_info
+      run: |
+        BINARY_NAME=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].targets[] | select(.kind[] == "bin") | .name' | head -n 1)
+        VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+        echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_OUTPUT
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+        echo "Binary: $BINARY_NAME, Version: $VERSION"
+    
+    - name: Create IPK package structure
+      run: |
+        BINARY_NAME="${{ steps.binary_info.outputs.BINARY_NAME }}"
+        VERSION="${{ steps.binary_info.outputs.VERSION }}"
+        PKG_NAME="${BINARY_NAME}_${VERSION}_aarch64_cortex-a53"
+        
+        # 創建 IPK 目錄結構
+        mkdir -p ipk_build/${PKG_NAME}/usr/bin
+        mkdir -p ipk_build/${PKG_NAME}/CONTROL
+        
+        # 複製二進制文件
+        cp target/aarch64-unknown-linux-musl/release/${BINARY_NAME} ipk_build/${PKG_NAME}/usr/bin/
+        chmod +x ipk_build/${PKG_NAME}/usr/bin/${BINARY_NAME}
+        
+        # 創建 control 文件
+        cat > ipk_build/${PKG_NAME}/CONTROL/control << EOF
+        Package: ${BINARY_NAME}
+        Version: ${VERSION}
+        Architecture: aarch64_cortex-a53
+        Maintainer: Your Name <your.email@example.com>
+        Section: net
+        Priority: optional
+        Description: ${BINARY_NAME} compiled for OpenWrt
+         This is a Rust application compiled for OpenWrt aarch64.
+        EOF
+        
+        # 創建 postinst 腳本（可選）
+        cat > ipk_build/${PKG_NAME}/CONTROL/postinst << 'EOF'
+        #!/bin/sh
+        echo "Installation completed successfully"
+        exit 0
+        EOF
+        chmod +x ipk_build/${PKG_NAME}/CONTROL/postinst
+        
+        echo "PKG_NAME=${PKG_NAME}" >> $GITHUB_ENV
+    
+    - name: Install ipkg-build tool
+      run: |
+        wget https://raw.githubusercontent.com/openwrt/openwrt/master/scripts/ipkg-build
+        chmod +x ipkg-build
+    
+    - name: Build IPK package
+      run: |
+        ./ipkg-build -c -o root -g root ipk_build/${PKG_NAME}
+        mkdir -p ipk_output
+        mv *.ipk ipk_output/
+    
+    - name: Upload IPK package
+      uses: actions/upload-artifact@v4
+      with:
+        name: openwrt-ipk-package
+        path: ipk_output/*.ipk
+    
+    - name: Upload binary (for reference)
       uses: actions/upload-artifact@v4
       with:
         name: aarch64-musl-binary
-        path: target/aarch64-unknown-linux-musl/release/
+        path: target/aarch64-unknown-linux-musl/release/${{ steps.binary_info.outputs.BINARY_NAME }}
