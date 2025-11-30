@@ -1,127 +1,46 @@
-name: Build trafficmon for OpenWrt (MT7986 / aarch64)
+name: Build Rust with Cross (Custom Config)
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, master ]
-  workflow_dispatch:   # 手動觸發
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
-  build-openwrt:
+  build:
     runs-on: ubuntu-latest
-    env:
-      # 可切換成 snapshot 最新版（下面有自動抓最新版的寫法）
-      SDK_URL: https://downloads.openwrt.org/releases/24.10.3/targets/mediatek/filogic/openwrt-sdk-24.10.3-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
-      # SDK_URL: https://downloads.openwrt.org/snapshots/targets/mediatek/filogic/openwrt-sdk-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
-      RUST_TARGET: aarch64-unknown-linux-musl
-      PACKAGE_NAME: trafficmon
-      PACKAGE_VERSION: 0.3.0-1
+    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Create Cross.toml config
+      run: |
+        cat > Cross.toml << EOF
+        [target.aarch64-unknown-linux-musl]
+        pre-build = [
+            "apt-get update && apt-get install -y libpcap-dev"
+        ]
+        EOF
+    
+    - name: Install Rust toolchain
+      run: |
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+    
+    - name: Install cross
+      run: |
+        source $HOME/.cargo/env
+        cargo install cross --git https://github.com/cross-rs/cross
+    
+    - name: Build with cross
+      run: |
+        source $HOME/.cargo/env
+        cross build --target aarch64-unknown-linux-musl --release
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential clang llvm \
-            zstd axel aria2 \
-            libssl-dev libpcap-dev \
-            pkg-config file jq
-
-      - name: Download OpenWrt SDK (fast)
-        run: |
-          mkdir -p sdk
-          echo "Downloading SDK..."
-          aria2c -x 16 -s 16 "$SDK_URL" -o sdk.tar.zst
-          echo "Extracting SDK..."
-          tar --use-compress-program=zstd -xf sdk.tar.zst -C sdk --strip-components=1
-          rm sdk.tar.zst
-
-      - name: Install Rust (stable + musl target)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-unknown-linux-musl
-          components: rustfmt, clippy
-
-      - name: Create .cargo/config.toml (最穩定的交叉編譯方式)
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml << EOF
-          [target.aarch64-unknown-linux-musl]
-          linker = "${{ github.workspace }}/sdk/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/bin/aarch64-openwrt-linux-musl-gcc"
-          rustflags = [
-            "-C", "target-feature=+crt-static",   # 完全靜態連結
-            "-C", "link-arg=-s"                   # strip 符號
-          ]
-          EOF
-
-      - name: Cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ env.RUST_TARGET }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-${{ env.RUST_TARGET }}-
-
-      - name: Build release binary (fully static)
-        run: |
-          cargo build --release --target ${{ env.RUST_TARGET }}
-          # 再 strip 一次保險
-          ${{ github.workspace }}/sdk/staging_dir/toolchain-aarch64_cortex-a53_gcc-13.3.0_musl/bin/aarch64-openwrt-linux-musl-strip \
-            target/${{ env.RUST_TARGET }}/release/${{ env.PACKAGE_NAME }}
-
-      - name: Verify binary is static
-        run: |
-          file target/${{ env.RUST_TARGET }}/release/${{ env.PACKAGE_NAME }}
-          ldd target/${{ env.RUST_TARGET }}/release/${{ env.PACKAGE_NAME }} && exit 1 || echo "Static binary: OK"
-
-      - name: Prepare OpenWrt package directory
-        run: |
-          mkdir -p ipk-package/${{ env.PACKAGE_NAME }}/usr/bin
-          mkdir -p ipk-package/${{ env.PACKAGE_NAME }}/CONTROL
-
-          cp target/${{ env.RUST_TARGET }}/release/${{ env.PACKAGE_NAME }} \
-             ipk-package/${{ env.PACKAGE_NAME }}/usr/bin/
-
-          cat > ipk-package/${{ env.PACKAGE_NAME }}/CONTROL/control << EOF
-          Package: ${{ env.PACKAGE_NAME }}
-          Version: ${{ env.PACKAGE_VERSION }}
-          Architecture: aarch64_cortex-a53
-          Maintainer: ${{ github.actor }} <${{ github.actor }}@users.noreply.github.com>
-          Section: net
-          Priority: optional
-          Depends: libc, libpcap
-          Description: Rust-based traffic monitoring tool for OpenWrt
-           Real-time bandwidth statistics using libpcap.
-          EOF
-
-      - name: Build .ipk with official ipkg-build
-        run: |
-          mkdir -p artifacts
-          sdk/scripts/ipkg-build ipk artifacts/
-
-      - name: List generated artifacts
-        run: |
-          echo "=== Generated files ==="
-          ls -lh artifacts/
-          file artifacts/*.ipk
-
-      - name: Upload IPK as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: trafficmon-openwrt-aarch64_cortex-a53
-          path: artifacts/*.ipk
-          if-no-files-found: error
-
-      # 可選：自動發布到 GitHub Releases（tag 時）
-      - name: Upload to GitHub Release (only on tag)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/*.ipk
-          fail_on_unmatched_files: true
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: aarch64-musl-binary
+        path: target/aarch64-unknown-linux-musl/release/
